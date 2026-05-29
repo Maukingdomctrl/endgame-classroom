@@ -120,3 +120,4 @@ See `public/sf-worker.js` and `src/engine/useStockfish.ts` for implementation.
 ## License
 
 MIT — see [LICENSE](./LICENSE)
+Added Vision trainer - 29-05-2026
