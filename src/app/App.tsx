@@ -1,58 +1,47 @@
 /**
  * App.tsx — Endgame Classroom
  *
- * KEY FIXES vs original:
- * 1. useStockfish receives `enabled` flag — only activates during SF play mode
- * 2. Session.scheduleReply() replaces raw setTimeout for opponent moves
- * — fixes the FEN/stepIndex desync
- * 3. Hint button shows PGN comment (hint field from parsePgn)
- * 4. After completing a lesson, "Play vs Stockfish" button appears
- * 5. Board editor Save properly calls sync server
- * 6. analyze(fen) moved to a useEffect gated by the engine's ready state
+ * FIXES in this revision:
+ * 1. sfPlayFenRef — useRef mirrors sfPlayFen state so onSfPieceDrop
+ * always reads the live position (eliminates stale closure bug).
+ * 2. onSfPieceDrop — reads ref, not state. Calls analyze() once after
+ * playMove resolves with the final position (no double-search).
+ * 3. startSfPlay — keeps ref in sync on mode entry. Use lesson.startFen, not fen.
+ * 4. Default engine skill level raised to 20; slider range min clamped to 10.
  */
-
 import { useState, useEffect, useRef, useMemo, type CSSProperties } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { Session } from "../engine/session";
 import { module1 } from "../modules/module1/loader";
 import { useStockfish } from "../engine/useStockfish";
+import EvalBar, { EVAL_W, EVAL_GAP } from "../components/EvalBar";
 import BoardEditor from "../components/BoardEditor";
 
 const BOARD_BORDER = 12;
-const EVAL_W       = 16;
-const EVAL_GAP     = 12;
 const FALLBACK_FEN = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
 
-// ── EvalBar ───────────────────────────────────────────────────────────────────
-function EvalBar({ bar, cp, mate, size }: { bar: number; cp: number | null; mate: number | null; size: number }) {
-  const pct = Math.round(((bar + 5) / 10) * 100);
-  let label: string;
-  if (mate !== null)     label = mate > 0 ? `M${mate}` : `-M${Math.abs(mate)}`;
-  else if (cp !== null)  label = (cp / 100) > 0 ? `+${(cp / 100).toFixed(1)}` : (cp / 100).toFixed(1);
-  else                   label = "0.0";
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: EVAL_W, height: size, flexShrink: 0, marginRight: EVAL_GAP }}>
-      <div style={{ width: "100%", flex: 1, border: "1px solid #2b261f", borderRadius: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "#1c1813" }}>
-        <div style={{ width: "100%", background: "#2b251f", height: `${100 - pct}%`, transition: "height 0.25s ease" }} />
-        <div style={{ width: "100%", background: "#d9cb9e", height: `${pct}%`,       transition: "height 0.25s ease" }} />
-      </div>
-      <span style={{ fontSize: 11, color: "#8c7e6b", marginTop: 4, whiteSpace: "nowrap", fontFamily: "Georgia, serif", fontStyle: "italic" }}>{label}</span>
-    </div>
-  );
-}
-
 // ── Board ─────────────────────────────────────────────────────────────────────
-function Board({ fen, boardSize, onPieceDrop }: { fen: string; boardSize: number; onPieceDrop: (s: string, t: string) => boolean }) {
+function Board({ fen, boardSize, onPieceDrop, hintSquares = [] }: {
+  fen: string; boardSize: number;
+  onPieceDrop: (s: string, t: string) => boolean;
+  hintSquares?: string[];
+}) {
   const innerSize = boardSize - BOARD_BORDER * 2;
+  const squareStyles: Record<string, CSSProperties> = {};
+  hintSquares.forEach((sq, i) => {
+    squareStyles[sq] = {
+      backgroundColor: i === 0 ? "rgba(255,200,80,0.6)" : "rgba(100,210,130,0.6)",
+      transition: "background-color 0.3s ease",
+    };
+  });
   return (
     <div style={{ width: boardSize, height: boardSize, border: `${BOARD_BORDER}px solid #26211a`, boxSizing: "border-box", flexShrink: 0, overflow: "hidden", outline: "1px solid #ebdcb9", boxShadow: "0 16px 36px rgba(0,0,0,0.9)" }}>
       <Chessboard position={fen} onPieceDrop={onPieceDrop} boardWidth={innerSize}
         customBoardStyle={{ borderRadius: 0 }}
         customLightSquareStyle={{ backgroundColor: "#d9cb9e" }}
         customDarkSquareStyle={{ backgroundColor: "#403425" }}
-        animationDuration={300} />
+        customSquareStyles={squareStyles} animationDuration={300} />
     </div>
   );
 }
@@ -82,20 +71,22 @@ export default function App() {
   const [menuOpen, setMenuOpen]       = useState(false);
   const [editorOpen, setEditorOpen]   = useState(false);
 
-  // Stockfish play mode — engine is ONLY active here
   const [sfPlayMode, setSfPlayMode]     = useState(false);
-  const [sfSkillLevel, setSfSkillLevel] = useState(10);
+  const [sfSkillLevel, setSfSkillLevel] = useState(20); // ← Raised default level to 20
   const [sfPlayFen, setSfPlayFen]       = useState(FALLBACK_FEN);
   const [sfWaiting, setSfWaiting]       = useState(false);
+
+  // ── FIX 1: ref mirrors sfPlayFen so onSfPieceDrop never reads stale state
+  const sfPlayFenRef = useRef(FALLBACK_FEN);
 
   const lesson = useMemo(() => {
     return module1?.lessons?.[lessonIndex] || {
       id: "m1-0001", module: "module-1", title: "Untitled Lesson",
-      elo: 800, theme: [], intro: "No lessons loaded. Add .pgn files to src/modules/module1/", objective: "", steps: [], mode: "puzzle" as const,
+      elo: 800, theme: [], intro: "No lessons loaded.", objective: "", steps: [], mode: "puzzle" as const,
     };
   }, [lessonIndex]);
 
-  const lessonMode = (lesson as { mode?: string }).mode ?? "puzzle";
+  const lessonMode  = (lesson as { mode?: string }).mode ?? "puzzle";
   const mastersNote = (lesson as { mastersNote?: string }).mastersNote;
 
   const [fen, setFen]                           = useState(() => lesson?.startFen || FALLBACK_FEN);
@@ -104,6 +95,7 @@ export default function App() {
   const [feedback, setFeedback]                 = useState<{ text: string; ok: boolean } | null>(null);
   const [finished, setFinished]                 = useState(false);
   const [showHint, setShowHint]                 = useState(false);
+  const [hintLoading, setHintLoading]           = useState(false);
   const [drawingMode, setDrawingMode]           = useState(false);
   const [tool, setTool]                         = useState<"pen" | "eraser">("pen");
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -118,28 +110,14 @@ export default function App() {
   }
   const activeSession = sessionRef.current;
 
-  // ── Stockfish: ONLY enabled when sfPlayMode is true ──────────────────────
-  const activeFen = sfPlayMode ? sfPlayFen : fen;
-  const { ready, analyze, playMove, bar, cp, mate } = useStockfish(
-    activeFen,
-    sfPlayMode,   // enabled flag — no engine when studying lessons
-    16
+  const { ready, analyze, playMove, getHint, bar, cp, mate, hintSquares } = useStockfish(
+    sfPlayFen, true, 16
   );
 
-  useEffect(() => {
-    if (!ready) return;
-
-    if (sfPlayMode && analyze) {
-      analyze(activeFen, 14);
-    }
-  }, [activeFen, ready, sfPlayMode, analyze]);
-
-  // ── Reset on lesson change ────────────────────────────────────────────────
   useEffect(() => {
     if (!lesson) return;
     sessionRef.current = new Session(lesson);
     activeSession.reset?.();
-
     const startFen = lesson.startFen || FALLBACK_FEN;
     setFen(startFen);
     setCurrentStepIndex(0);
@@ -148,31 +126,26 @@ export default function App() {
     setFinished(false);
     setShowHint(false);
     setSfPlayMode(false);
-
-    const intro = lessonMode === "lecture"
+    setCoachSays(lessonMode === "lecture"
       ? "Follow the demonstration. Play each move on the board."
-      : "Study the position. Make your move.";
-    setCoachSays(intro);
+      : "Study the position. Make your move.");
   }, [lessonIndex, tick]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Responsive sizing ─────────────────────────────────────────────────────
   useEffect(() => {
     function resize() {
-      const stack = window.innerWidth < 1320;
+      const windowW = window.innerWidth;
+      const windowH = window.innerHeight;
+      const stack   = windowW < 1120;
       setIsStacked(stack);
-      const pagePaddingX   = 40;
-      const leftBlockExtra = EVAL_W + EVAL_GAP;
-      const middleGap      = 48;
-      const reservedHeight = stack ? 200 : 220;
-      const maxByH         = window.innerHeight - reservedHeight;
-      let fitByW = 700;
-      while (fitByW > 440) {
-        const rightW  = stack ? 0 : Math.min(Math.round(fitByW * 0.74), 480);
-        const neededW = leftBlockExtra + fitByW + (stack ? 0 : middleGap + rightW) + pagePaddingX;
-        if (neededW <= window.innerWidth) break;
-        fitByW -= 2;
+      const maxByH = windowH - 190;
+      let target   = 560;
+      if (stack) {
+        target = Math.min(windowW - 60, maxByH, 620);
+      } else {
+        const maxByW = Math.floor((windowW - EVAL_W - EVAL_GAP - 88) * 0.58);
+        target = Math.min(maxByH, maxByW, 640);
       }
-      setBoardSize(Math.max(Math.min(700, fitByW, maxByH), 440));
+      setBoardSize(Math.max(target, 460));
     }
     resize();
     window.addEventListener("resize", resize);
@@ -201,94 +174,113 @@ export default function App() {
     setShowHint(false);
   }
 
-  // ── Lesson move handler ───────────────────────────────────────────────────
   function onPieceDrop(src: string, tgt: string): boolean {
     if (finished || activeSession.awaitingOpponentReply) return false;
-
     const res = activeSession.tryMove(src, tgt);
-
     if (!res.ok) {
       const txt = res.feedback ?? "Try again.";
       setFeedback({ text: txt, ok: false });
       setCoachSays(txt);
       return false;
     }
-
     const wFen   = activeSession.game.fen();
     const midIdx = activeSession.stepIndex;
-
     setFen(wFen);
     setCurrentStepIndex(midIdx);
     setFeedback({ text: res.feedback!, ok: true });
     setCoachSays(res.feedback!);
     setShowHint(false);
     setHistory((p) => [...p, { fen: wFen, step: midIdx }]);
-
-    if (res.finished) {
-      setFinished(true);
-      return true;
-    }
-
-    // Schedule opponent reply via session (fixes FEN/step desync)
+    if (res.finished) { setFinished(true); return true; }
     if (res.hasReply) {
       activeSession.scheduleReply(res.replyDelay ?? 700, (replyFen, replyStep) => {
         setFen(replyFen);
         setCurrentStepIndex(replyStep);
         setHistory((p) => [...p, { fen: replyFen, step: replyStep }]);
-        if (res.autoAdvance) {
-          setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
-        }
+        if (res.autoAdvance) setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
       });
     } else if (res.autoAdvance) {
-      setTimeout(() => {
-        setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
-      }, 1200);
+      setTimeout(() => setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration."), 1200);
     }
-
     return true;
   }
 
-  // ── Stockfish play mode ───────────────────────────────────────────────────
+  // ── FIX 1: startSfPlay uses lesson.startFen ─────────────────────────────────
   function startSfPlay() {
+    const startingFen = lesson.startFen || FALLBACK_FEN; // ← Uses lesson.startFen instead of mid-lesson fen state
+    setSfPlayFen(startingFen);
+    sfPlayFenRef.current = startingFen;         // ← sync ref
     setSfPlayMode(true);
-    setSfPlayFen(fen);
     setCoachSays(`Playing vs Stockfish — Skill Level ${sfSkillLevel}`);
+    if (ready) analyze(startingFen, 16);
   }
 
+  // ── FIX 3: onSfPieceDrop reads ref, single analyze after move resolves ───
   async function onSfPieceDrop(src: string, tgt: string): Promise<boolean> {
     if (sfWaiting) return false;
     try {
-      const g = new Chess(sfPlayFen);
+      // Read the live FEN from the ref — never stale even mid-render-cycle
+      const g    = new Chess(sfPlayFenRef.current);
       const move = g.move({ from: src, to: tgt, promotion: "q" });
       if (!move) return false;
 
       const afterPlayer = g.fen();
       setSfPlayFen(afterPlayer);
+      sfPlayFenRef.current = afterPlayer;       // ← sync ref
 
       if (g.isGameOver()) {
         setCoachSays(g.isCheckmate() ? "Checkmate! Well played." : "Game over.");
+        analyze(afterPlayer, 16);
         return true;
       }
 
       setSfWaiting(true);
       setCoachSays("Stockfish is thinking…");
 
+      // playMove: engine searches 1500ms and resolves with the best move.
+      // We do NOT call analyze() before this — no double-search.
       const bestMove = await playMove(afterPlayer, sfSkillLevel);
+
       if (bestMove && bestMove.length >= 4) {
-        const from  = bestMove.slice(0, 2);
-        const to    = bestMove.slice(2, 4);
-        const promo = bestMove[4] ?? "q";
-        g.move({ from, to, promotion: promo });
-        setSfPlayFen(g.fen());
-        setCoachSays(g.isGameOver()
-          ? (g.isCheckmate() ? "Stockfish delivers checkmate." : "Game over.")
-          : "Your turn.");
+        g.move({
+          from:      bestMove.slice(0, 2),
+          to:        bestMove.slice(2, 4),
+          promotion: bestMove[4] ?? "q",
+        });
+        const afterEngine = g.fen();
+
+        setSfPlayFen(afterEngine);
+        sfPlayFenRef.current = afterEngine;     // ← sync ref
+        setSfWaiting(false);
+
+        if (g.isGameOver()) {
+          setCoachSays(g.isCheckmate() ? "Stockfish delivers checkmate." : "Game over.");
+        } else {
+          setCoachSays("Your turn.");
+        }
+
+        // Single clean analyze of the position the player now faces.
+        // Engine is idle (playMove just resolved from bestmove), so this
+        // executes immediately. The bar updates exactly once with the result.
+        analyze(afterEngine, 16);
+      } else {
+        setSfWaiting(false);
       }
-      setSfWaiting(false);
+
       return true;
     } catch {
       setSfWaiting(false);
       return false;
+    }
+  }
+
+  async function handleHintClick() {
+    if (showHint) { setShowHint(false); return; }
+    setShowHint(true);
+    if (ready && lessonMode === "puzzle" && !finished) {
+      setHintLoading(true);
+      try { await getHint(fen); }
+      finally { setHintLoading(false); }
     }
   }
 
@@ -300,26 +292,22 @@ export default function App() {
   const safeThemes      = Array.isArray(lesson?.theme) ? lesson.theme : [];
   const safeSteps       = Array.isArray(lesson?.steps) ? lesson.steps : [];
   const totalLeftBlockW = boardSize + EVAL_W + EVAL_GAP;
-  const wbW             = isStacked ? Math.min(boardSize, 680) : Math.min(Math.round(boardSize * 0.74), 480);
-
+  const wbW             = isStacked ? boardSize : Math.min(Math.round(boardSize * 0.76), 440);
+  const wbH             = boardSize + 56;
   const currentStep     = activeSession.currentStep;
   const liveHint        = currentStep?.hint ?? (lessonMode === "lecture" ? "Play the next move." : "Find the best move.");
   const liveExplanation = currentStep?.explanation ?? "";
   const editorFilename  = `${String(lessonIndex + 1).padStart(4, "0")}-${lesson.id}`;
-
   const activeDropHandler = sfPlayMode
     ? (src: string, tgt: string) => { onSfPieceDrop(src, tgt); return true; }
     : onPieceDrop;
 
   return (
     <div style={S.page}>
-
-      {/* Hamburger */}
       <button style={S.hamburger} onClick={() => setMenuOpen((m) => !m)}>
         {menuOpen ? "✕ Close" : "☰ Index"}
       </button>
 
-      {/* Sidebar */}
       <div style={{ ...S.sidebar, transform: menuOpen ? "translateX(0)" : "translateX(-100%)" }}>
         <div style={S.sidebarHead}>
           <h3 style={S.sidebarTitle}>Curriculum Hub</h3>
@@ -332,7 +320,7 @@ export default function App() {
           {module1?.lessons?.map((les: { id?: string; title: string; elo?: number }, idx: number) => {
             const active = idx === lessonIndex;
             return (
-              <button key={les.id || idx} onClick={() => { loadLesson(idx); setMenuOpen(false); }}
+              <button key={`${les.id || "lesson"}-${idx}`} onClick={() => { loadLesson(idx); setMenuOpen(false); }}
                 style={{ ...S.lessonBtn, backgroundColor: active ? "#2b231a" : "transparent", color: active ? "#c4b293" : "#6b5e4c", fontWeight: active ? "bold" : "normal", borderLeft: active ? "2px solid #a69272" : "2px solid transparent" }}>
                 <span style={{ opacity: 0.6, marginRight: 6 }}>{String(idx + 1).padStart(2, "0")}</span>
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 8 }}>{les.title}</span>
@@ -343,10 +331,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main */}
       <div style={S.mainContainer}>
-
-        {/* Vintage header */}
         <div style={S.vintageHeaderBlock}>
           <div style={S.headerTopBorder} />
           <h1 style={S.centeredTitle}>Endgame Classroom</h1>
@@ -358,28 +343,21 @@ export default function App() {
           <div style={S.headerBottomBorder} />
         </div>
 
-        {/* Header row */}
         <div style={{ ...S.headerRow, flexDirection: isStacked ? "column" : "row", alignItems: "center", gap: isStacked ? 10 : 16 }}>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
             <span style={S.badge}>{lesson?.elo ?? 800} ELO</span>
             <span style={{ ...S.badge, color: lessonMode === "lecture" ? "#a3b39c" : "#c4b293" }}>
               {lessonMode === "lecture" ? "📖 Lecture" : lessonMode === "free" ? "♟ Free" : "🎯 Puzzle"}
             </span>
-            {safeThemes.slice(0, 2).map((t: string) => (
-              <span key={t} style={S.themeBadge}>{t}</span>
-            ))}
+            {safeThemes.slice(0, 2).map((t: string) => <span key={t} style={S.themeBadge}>{t}</span>)}
           </div>
 
-          {/* Live hint bar */}
           {!finished && !sfPlayMode && currentStep && (
             <div style={S.integratedTaskArea}>
-              <span style={S.taskPrefixLabel}>
-                {lessonMode === "lecture" ? "DEMONSTRATION" : "ASSIGNMENT"} • STEP {currentStepIndex + 1}:
-              </span>
+              <span style={S.taskPrefixLabel}>{lessonMode === "lecture" ? "DEMONSTRATION" : "ASSIGNMENT"} • STEP {currentStepIndex + 1}:</span>
               <span style={S.taskInlineContent}>{liveHint}</span>
             </div>
           )}
-
           {sfPlayMode && (
             <div style={S.integratedTaskArea}>
               <span style={S.taskPrefixLabel}>VS STOCKFISH — SKILL {sfSkillLevel}:</span>
@@ -389,58 +367,50 @@ export default function App() {
 
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
             <button style={{ ...S.toolBtn, ...(editorOpen ? S.toolActive : S.editInactive) }}
-              onClick={() => { setEditorOpen((o) => !o); if (drawingMode) setDrawingMode(false); }}>
-              ✒ Edit
-            </button>
+              onClick={() => { setEditorOpen((o) => !o); if (drawingMode) setDrawingMode(false); }}>✒ Edit</button>
             <button style={{ ...S.toolBtn, ...(drawingMode ? S.toolActive : {}) }}
-              onClick={() => { setDrawingMode((d) => !d); if (editorOpen) setEditorOpen(false); }}>
-              ✒ Draw
-            </button>
+              onClick={() => { setDrawingMode((d) => !d); if (editorOpen) setEditorOpen(false); }}>✒ Draw</button>
             {drawingMode && (
               <>
                 <button style={{ ...S.toolBtn, ...(tool === "eraser" ? S.toolActive : {}) }} onClick={() => setTool("eraser")}>◻</button>
-                <button style={{ ...S.toolBtn, ...(tool === "pen"    ? S.toolActive : {}) }} onClick={() => setTool("pen")}>✏</button>
+                <button style={{ ...S.toolBtn, ...(tool === "pen" ? S.toolActive : {}) }} onClick={() => setTool("pen")}>✏</button>
                 <button style={S.toolBtn} onClick={clearCanvas}>✕</button>
               </>
             )}
             {!sfPlayMode && (
-              <button style={{ ...S.toolBtn, ...(showHint ? S.toolActive : {}) }}
-                onClick={() => setShowHint((h) => !h)}>
-                💡 Hint
+              <button style={{ ...S.toolBtn, ...(showHint ? S.toolActive : {}), opacity: hintLoading ? 0.6 : 1 }}
+                onClick={handleHintClick} disabled={hintLoading}>
+                {hintLoading ? "⏳" : "💡"} Hint
               </button>
             )}
           </div>
         </div>
 
-        {/* Columns */}
         <div style={{ ...S.cols, flexDirection: isStacked ? "column" : "row", alignItems: isStacked ? "center" : "stretch", gap: isStacked ? 20 : 48 }}>
-
           <div style={{ ...S.leftCol, position: "relative" }}>
-
-            {/* Hint popup — appears above board */}
             {showHint && !sfPlayMode && currentStep && (
               <HintPopup hint={liveHint} explanation={liveExplanation} onClose={() => setShowHint(false)} />
             )}
 
             <div style={{ display: "flex", flexDirection: "row", alignItems: "flex-start" }}>
-              {sfPlayMode && (
-                <EvalBar bar={bar} cp={cp} mate={mate} size={boardSize} />
-              )}
-              {!sfPlayMode && (
-                /* Placeholder spacer so board doesn't shift when eval bar appears */
-                <div style={{ width: EVAL_W, marginRight: EVAL_GAP, flexShrink: 0 }} />
-              )}
-              <Board fen={activeFen} boardSize={boardSize} onPieceDrop={activeDropHandler} />
+              {sfPlayMode
+                ? <EvalBar bar={bar} cp={cp} mate={mate} size={boardSize} />
+                : <div style={{ width: EVAL_W, marginRight: EVAL_GAP, flexShrink: 0 }} />
+              }
+              <Board
+                fen={sfPlayMode ? sfPlayFen : fen}
+                boardSize={boardSize}
+                onPieceDrop={activeDropHandler}
+                hintSquares={hintSquares}
+              />
             </div>
 
-            {/* Coach says */}
-            <div style={{ width: totalLeftBlockW, padding: "6px 12px", boxSizing: "border-box", background: "#1c1712", border: "1px solid #362f25", borderLeft: `3px solid ${feedback?.ok ? "#56664d" : feedback ? "#824b4b" : "#736451"}`, textAlign: "center" }}>
+            <div style={{ width: totalLeftBlockW, padding: "8px 12px", boxSizing: "border-box", background: "#1c1712", border: "1px solid #362f25", borderLeft: `3px solid ${feedback?.ok ? "#56664d" : feedback ? "#824b4b" : "#736451"}`, textAlign: "center" }}>
               <span style={{ color: feedback?.ok ? "#a3b899" : feedback ? "#cc9999" : "#bdae99", fontSize: 13, fontFamily: "Georgia, serif", fontStyle: "italic" }}>
                 {coachSays}
               </span>
             </div>
 
-            {/* Controls */}
             {!sfPlayMode ? (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4, width: totalLeftBlockW }}>
@@ -461,7 +431,7 @@ export default function App() {
                 <button style={S.btn} onClick={() => { setSfPlayMode(false); setCoachSays("Study the position. Make your move."); }}>← Back to Lesson</button>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   <span style={{ fontSize: 11, color: "#8c7e6b", fontFamily: "Georgia, serif" }}>Skill:</span>
-                  <input type="range" min={1} max={20} value={sfSkillLevel}
+                  <input type="range" min={10} max={20} value={sfSkillLevel} // ← Adjusted min={10} on the skill level slider
                     onChange={(e) => setSfSkillLevel(Number(e.target.value))}
                     style={{ width: 80, accentColor: "#a69272" }} />
                   <span style={{ fontSize: 11, color: "#c4b293", minWidth: 20, fontFamily: "Georgia, serif" }}>{sfSkillLevel}</span>
@@ -470,43 +440,30 @@ export default function App() {
             )}
           </div>
 
-          {/* Right col: paper */}
           <div style={{ ...S.rightCol, width: wbW }}>
-            <div style={{ ...S.paper, width: wbW, height: "100%" }}>
+            <div style={{ ...S.paper, width: wbW, height: isStacked ? "auto" : wbH }}>
               <div style={{ position: "absolute", inset: 0, pointerEvents: "none", backgroundImage: "repeating-linear-gradient(transparent,transparent 27px,#d1c2a5 27px,#d1c2a5 28px)", backgroundPositionY: "44px", opacity: 0.25, zIndex: 0 }} />
-
               <div style={{ position: "relative", padding: "20px 24px 24px 24px", display: "flex", flexDirection: "column", gap: 12, zIndex: 1, boxSizing: "border-box" }}>
-                <div style={{ fontSize: 22, fontWeight: "bold", color: "#211a12", fontFamily: "Georgia, serif", borderBottom: "1px solid #c4b293", paddingBottom: 2 }}>
-                  {lesson.title}
-                </div>
+                <div style={{ fontSize: 22, fontWeight: "bold", color: "#211a12", fontFamily: "Georgia, serif", borderBottom: "1px solid #c4b293", paddingBottom: 2 }}>{lesson.title}</div>
                 <div style={{ textAlign: "center", color: "#7a6e5d", fontSize: 11, margin: "-4px 0" }}>❖ ❖ ❖</div>
-
-                {mastersNote && (
-                  <div style={{ fontSize: 11, color: "#7a6e5d", fontStyle: "italic", fontFamily: "Georgia, serif" }}>— {mastersNote}</div>
-                )}
-
+                {mastersNote && <div style={{ fontSize: 11, color: "#7a6e5d", fontStyle: "italic", fontFamily: "Georgia, serif" }}>— {mastersNote}</div>}
                 {lesson.intro && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <span style={S.wbLabel}>Introduction</span>
                     <p style={{ fontSize: 14, color: "#2b2118", margin: 0, lineHeight: "20px", fontFamily: "Georgia, serif" }}>{lesson.intro}</p>
                   </div>
                 )}
-
                 {lesson.objective && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     <span style={S.wbLabel}>Objective</span>
                     <p style={{ fontSize: 14, color: "#2b2118", margin: 0, lineHeight: "20px", fontFamily: "Georgia, serif" }}>{lesson.objective}</p>
                   </div>
                 )}
-
-                {/* Step progress dots */}
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap", paddingTop: 2 }}>
                   {safeSteps.map((_, i: number) => (
                     <div key={i} style={{ width: 6, height: 6, background: i < currentStepIndex ? "#4a5743" : i === currentStepIndex ? "#8c795c" : "#d1c4b0", outline: "1px solid #7a6b54" }} />
                   ))}
                 </div>
-
-                {/* Finished state */}
                 {finished && !sfPlayMode && (
                   <>
                     <div style={{ textAlign: "center", color: "#7a6e5d", fontSize: 11 }}>❖</div>
@@ -516,53 +473,35 @@ export default function App() {
                         {(lesson as { finalReflection?: string }).finalReflection || "Lesson completed successfully."}
                       </p>
                     </div>
-
-                    {/* ♟ Play vs Stockfish — only appears after lesson completion */}
-                    <button style={S.sfBtn} onClick={startSfPlay}>
-                      ♟ Play vs Stockfish from this position
-                    </button>
-
+                    <button style={S.sfBtn} onClick={startSfPlay}>♟ Play vs Stockfish from this position</button>
                     {module1?.lessons && lessonIndex < module1.lessons.length - 1 && (
-                      <button style={S.nextBtn} onClick={() => loadLesson(lessonIndex + 1)}>
-                        Accept & Continue →
-                      </button>
+                      <button style={S.nextBtn} onClick={() => loadLesson(lessonIndex + 1)}>Accept & Continue →</button>
                     )}
                   </>
                 )}
-
-                {/* Mid-lesson SF play for lecture mode */}
                 {!finished && lessonMode === "lecture" && !sfPlayMode && (
-                  <button style={{ ...S.sfBtn, marginTop: 4 }} onClick={startSfPlay}>
-                    ♟ Play from this position
-                  </button>
+                  <button style={{ ...S.sfBtn, marginTop: 4 }} onClick={startSfPlay}>♟ Play from this position</button>
                 )}
               </div>
-
               <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, zIndex: 2, width: "100%", height: "100%", touchAction: "none", cursor: drawingMode ? "crosshair" : "default", opacity: drawingMode ? 0.8 : 0.4, pointerEvents: drawingMode ? "auto" : "none" }} />
             </div>
           </div>
         </div>
 
-        {/* Board Editor overlay */}
         {editorOpen && (
-          <BoardEditor
-            lesson={lesson}
-            moduleId={lesson.module || "module-1"}
-            filename={editorFilename}
+          <BoardEditor lesson={lesson} moduleId={lesson.module || "module-1"} filename={editorFilename}
             onClose={() => setEditorOpen(false)}
             onSaved={(updated) => {
               if (sessionRef.current) sessionRef.current.lesson = updated;
               setTick((t) => t + 1);
               setEditorOpen(false);
-            }}
-          />
+            }} />
         )}
       </div>
     </div>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const S: Record<string, CSSProperties> = {
   page:               { display: "flex", flexDirection: "row", gap: 24, justifyContent: "center", alignItems: "flex-start", height: "100dvh", background: "#14110e", padding: "20px 20px 32px 20px", boxSizing: "border-box", overflowY: "auto", overflowX: "hidden", fontFamily: "Georgia, serif" },
   mainContainer:      { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", gap: 12, width: "100%", maxWidth: 1160, minHeight: "max-content" },

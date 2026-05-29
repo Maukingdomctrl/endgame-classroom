@@ -1,27 +1,27 @@
-// Emscripten Stockfish writes output via self.print
-// and reads UCI commands via its own internal onmessage.
-// We intercept print and forward to the main thread.
+// sf-worker.js — robust Emscripten Stockfish bridge
 
-self.print = (line) => {
+self.print = function (line) {
   postMessage(line);
 };
 
-self.printErr = (line) => {
-  // Suppress noisy stderr unless you want it
-  // postMessage('[ERR] ' + line);
+self.printErr = function (_line) {
+  // suppress noisy stderr
 };
 
-// Load the engine — it auto-starts, no factory call needed
-importScripts('/stockfish.js');
+try {
+  importScripts("/stockfish.js");
 
-// Forward main-thread commands into the engine's stdin
-// Emscripten builds expose this as self.postMessage internally,
-// but the correct external API is to just re-set onmessage after load:
-const engineOnMessage = self.onmessage; // grab what stockfish.js installed
+  // engine installs its own onmessage
+  const engineHandler = self.onmessage;
 
-self.onmessage = (e) => {
-  if (engineOnMessage) engineOnMessage(e);
-};
-// Kick off UCI handshake explicitly
-const evt = new MessageEvent('message', { data: 'uci' });
-self.dispatchEvent(evt);
+  self.onmessage = function (e) {
+    if (engineHandler) engineHandler.call(self, e);
+  };
+
+  // initialize UCI
+  self.onmessage(new MessageEvent("message", { data: "uci" }));
+  self.onmessage(new MessageEvent("message", { data: "isready" }));
+  self.onmessage(new MessageEvent("message", { data: "ucinewgame" }));
+} catch (err) {
+  postMessage("SF_INIT_FAILED");
+}

@@ -1,109 +1,217 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-interface StockfishHook {
-  ready: boolean;
-  bar: number;
-  cp: number | null;
-  mate: number | null;
-  analyze: (fen: string, depth?: number) => void;
-  playMove: (fen: string, skillLevel?: number) => Promise<string | null>;
+export interface StockfishHook {
+  ready:       boolean;
+  bar:         number;
+  cp:          number | null;
+  mate:        number | null;
+  hintSquares: string[];
+  analyze:     (fen: string, depth?: number) => void;
+  playMove:    (fen: string, skillLevel?: number) => Promise<string | null>;
+  getHint:     (fen: string) => Promise<string | null>;
   sendCommand: (cmd: string) => void;
 }
 
-export function useStockfish(
-  _fen: string,
-  enabled: boolean,
-  _depth: number = 16
-): StockfishHook {
-  const workerRef   = useRef<Worker | null>(null);
-  const resolverRef = useRef<((move: string | null) => void) | null>(null);
+function cpToWinPct(cp: number): number {
+  const c = Math.max(-2000, Math.min(2000, cp));
+  return 50 + 50 * (2 / (1 + Math.exp(-c / 328.36)) - 1);
+}
 
-  const [ready, setReady] = useState(false);
-  const [cp,    setCp]    = useState<number | null>(null);
-  const [mate,  setMate]  = useState<number | null>(null);
-  const [bar,   setBar]   = useState(0);   // –5..+5 clamped, mapped to 0..1 in EvalBar
+function fenSide(fen: string): 'w' | 'b' {
+  return fen.trim().split(/\s+/)[1] === 'b' ? 'b' : 'w';
+}
+
+type JobKind = 'analyze' | 'move' | 'hint';
+interface Job {
+  kind:     JobKind;
+  fen:      string;
+  depth?:   number;
+  skill?:   number;
+  resolve?: (move: string | null) => void;
+}
+
+export function useStockfish(
+  _fen:    string,
+  enabled: boolean,
+  _depth:  number = 16,
+): StockfishHook {
+
+  const workerRef  = useRef<Worker | null>(null);
+  const busy       = useRef(false);
+  const activeJob  = useRef<Job | null>(null);
+  const queuedJob  = useRef<Job | null>(null);
+  const currentFen = useRef('');
+  const evalGot    = useRef(false);
+  const bestEval   = useRef<{ cp: number | null; mate: number | null; bar: number }>({
+    cp: null, mate: null, bar: 50,
+  });
+
+  const [ready,       setReady]       = useState(false);
+  const [hintSquares, setHintSquares] = useState<string[]>([]);
+  const [evalState,   setEvalState]   = useState<{ cp: number | null; mate: number | null; bar: number }>({
+    cp: null, mate: null, bar: 50,
+  });
+
+  const executeJob = useCallback((job: Job) => {
+    const w = workerRef.current;
+    if (!w) { job.resolve?.(null); return; }
+
+    activeJob.current  = job;
+    currentFen.current = job.fen;
+    evalGot.current    = false;
+    bestEval.current   = { cp: null, mate: null, bar: 50 };
+    busy.current       = true;
+
+    if (job.kind === 'move') {
+      w.postMessage(`setoption name Skill Level value ${job.skill ?? 10}`);
+    }
+    w.postMessage(`position fen ${job.fen}`);
+    switch (job.kind) {
+      case 'move':  w.postMessage('go movetime 1500'); break;
+      case 'hint':  w.postMessage('go depth 12');      break;
+      default:      w.postMessage(`go depth ${job.depth ?? 16}`);
+    }
+  }, []);
+
+  const submitJob = useCallback((job: Job) => {
+    if (busy.current) {
+      queuedJob.current = job;
+      workerRef.current?.postMessage('stop');
+    } else {
+      executeJob(job);
+    }
+  }, [executeJob]);
 
   useEffect(() => {
     if (!enabled) return;
 
     const worker = new Worker('/sf-worker.js');
     workerRef.current = worker;
-    console.log('Worker Created');
+    busy.current      = false;
+    activeJob.current = null;
+    queuedJob.current = null;
+
+    const readyFallback = setTimeout(() => setReady(true), 3000);
 
     worker.onmessage = (e: MessageEvent) => {
-      const line: string = e.data;
-      console.log('[SF RAW]', line);
+      // ── DIAGNOSTIC: log every raw line from the worker ──────────────────
+      // This will show us exactly what format Stockfish is outputting.
+      // Remove after confirming the format.
+      const raw  = e.data;
+      const line = typeof raw === 'string' ? raw : (raw instanceof ArrayBuffer ? '[ArrayBuffer]' : JSON.stringify(raw));
 
-      if (line === 'SF_INIT_FAILED') {
-        console.error('[Stockfish] Failed to initialize');
-        return;
-      }
+      console.log('[SF raw]', JSON.stringify(line));
 
       if (line.includes('uciok')) {
-        console.log('[Stockfish] Ready');
+        worker.postMessage('isready');
+        return;
+      }
+      if (line.includes('readyok')) {
+        clearTimeout(readyFallback);
         setReady(true);
         return;
       }
 
-      // Parse eval from info lines
-      if (line.startsWith('info') && line.includes('score')) {
-        const cpMatch   = line.match(/score cp (-?\d+)/);
-        const mateMatch = line.match(/score mate (-?\d+)/);
+      // ── Parse eval from info lines ──────────────────────────────────────
+      if (busy.current && line.includes('score')) {
+        const side  = fenSide(currentFen.current);
 
-        if (mateMatch) {
-          const m = parseInt(mateMatch[1]);
-          setMate(m);
-          setCp(null);
-          setBar(m > 0 ? 5 : -5);
-        } else if (cpMatch) {
-          const v = parseInt(cpMatch[1]);
-          setCp(v);
-          setMate(null);
-          setBar(Math.max(-5, Math.min(5, v / 100)));
+        // Very lenient patterns — catches any whitespace variation
+        const mateM = line.match(/score\s+mate\s+([-\d]+)/);
+        const cpM   = !mateM ? line.match(/score\s+cp\s+([-\d]+)/) : null;
+
+        if (mateM) {
+          const m     = parseInt(mateM[1], 10);
+          const wMate = side === 'w' ? m : -m;
+          console.log('[SF eval] mate raw=', mateM[1], 'side=', side, 'wMate=', wMate);
+          bestEval.current = { cp: null, mate: wMate, bar: wMate > 0 ? 100 : wMate < 0 ? 0 : 50 };
+          evalGot.current  = true;
+        } else if (cpM) {
+          const rawCp = parseInt(cpM[1], 10);
+          const wCp   = side === 'w' ? rawCp : -rawCp;
+          console.log('[SF eval] cp raw=', cpM[1], 'side=', side, 'wCp=', wCp, 'bar=', cpToWinPct(wCp).toFixed(1));
+          bestEval.current = { cp: wCp, mate: null, bar: cpToWinPct(wCp) };
+          evalGot.current  = true;
+        } else {
+          console.warn('[SF eval] SCORE LINE NOT PARSED:', JSON.stringify(line));
         }
       }
 
-      // Capture best move for playMove()
-      if (line.startsWith('bestmove') && resolverRef.current) {
-        const parts = line.split(' ');
-        const move  = parts[1] !== '(none)' ? parts[1] : null;
-        resolverRef.current(move);
-        resolverRef.current = null;
+      if (line.startsWith('bestmove')) {
+        console.log('[SF bestmove] evalGot=', evalGot.current, 'eval=', JSON.stringify(bestEval.current));
+        busy.current = false;
+        const job    = activeJob.current;
+        activeJob.current = null;
+
+        if (evalGot.current) {
+          setEvalState({ ...bestEval.current });
+        }
+
+        if (job?.resolve) {
+          const parts = line.split(' ');
+          const move  = (parts[1] && parts[1] !== '(none)') ? parts[1] : null;
+          job.resolve(move);
+        }
+
+        if (queuedJob.current) {
+          const next        = queuedJob.current;
+          queuedJob.current = null;
+          executeJob(next);
+        }
       }
     };
 
-    worker.onerror = (err) => {
-      console.error('[Stockfish Worker Error]', err);
-    };
+    worker.onerror = (err) => console.error('[SF Worker error]', err);
 
     return () => {
+      clearTimeout(readyFallback);
       worker.terminate();
       workerRef.current = null;
+      busy.current      = false;
       setReady(false);
     };
-  }, [enabled]);
+  }, [enabled, executeJob]);
 
   const sendCommand = useCallback((cmd: string) => {
     workerRef.current?.postMessage(cmd);
   }, []);
 
   const analyze = useCallback((fen: string, depth = 16) => {
-    if (!workerRef.current) return;
-    workerRef.current.postMessage('stop');
-    workerRef.current.postMessage(`position fen ${fen}`);
-    workerRef.current.postMessage(`go depth ${depth}`);
-  }, []);
+    console.log('[SF analyze] submitting fen=', fen, 'depth=', depth);
+    submitJob({ kind: 'analyze', fen, depth });
+  }, [submitJob]);
 
-  const playMove = useCallback((fen: string, skillLevel = 10): Promise<string | null> => {
-    return new Promise((resolve) => {
-      if (!workerRef.current) { resolve(null); return; }
-      resolverRef.current = resolve;
-      workerRef.current.postMessage('stop');
-      workerRef.current.postMessage(`setoption name Skill Level value ${skillLevel}`);
-      workerRef.current.postMessage(`position fen ${fen}`);
-      workerRef.current.postMessage('go movetime 1500');
-    });
-  }, []);
+  const playMove = useCallback((fen: string, skillLevel = 10): Promise<string | null> =>
+    new Promise((resolve) => {
+      console.log('[SF playMove] submitting fen=', fen, 'skill=', skillLevel);
+      submitJob({ kind: 'move', fen, skill: skillLevel, resolve });
+    }),
+  [submitJob]);
 
-  return { ready, bar, cp, mate, analyze, playMove, sendCommand };
+  const getHint = useCallback((fen: string): Promise<string | null> =>
+    new Promise((resolve) =>
+      submitJob({
+        kind: 'hint', fen,
+        resolve: (move) => {
+          if (move && move.length >= 4) {
+            setHintSquares([move.slice(0, 2), move.slice(2, 4)]);
+            setTimeout(() => setHintSquares([]), 3000);
+          }
+          resolve(move);
+        },
+      })
+    ),
+  [submitJob]);
+
+  return {
+    ready,
+    bar:  evalState.bar,
+    cp:   evalState.cp,
+    mate: evalState.mate,
+    hintSquares,
+    analyze,
+    playMove,
+    getHint,
+    sendCommand,
+  };
 }
