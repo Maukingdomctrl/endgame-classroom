@@ -1,10 +1,12 @@
 /**
  * App.tsx — Endgame Classroom
- * Full rewrite:
- * - Keeps Home / Classroom / Vision Trainer
- * - Adds Knight Navigator mini-game
- * - Preserves localStorage routing
- * - Includes safer Stockfish drop handling (sync validation)
+ * Full rewrite featuring upgraded Knight Navigator mechanics:
+ * - Option to play as the Black Knight or White Knight
+ * - Pre-game setup toggles for orientation and piece color
+ * - Dynamic FEN injection (Actually renders the Knight piece)
+ * - Strict 10-second timer per complete puzzle 
+ * - Global 2-minute timer with interval closure protection
+ * - Explicit "Learn" and "Play from position" toggles in Classroom Mode
  */
 
 import {
@@ -25,6 +27,15 @@ import BoardEditor from "../components/BoardEditor";
 const BOARD_BORDER = 10;
 const FALLBACK_FEN = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
 const EMPTY_FEN = "8/8/8/8/8/8/8/8 w - - 0 1";
+
+interface KnightPuzzle {
+  startSq: string;
+  targetSq: string;
+  par: number;
+  userPath: string[];
+  correctPath: string[];
+  status: "pending" | "correct" | "failed";
+}
 
 // ── Board ─────────────────────────────────────────────────────────────────────
 function Board({
@@ -100,6 +111,7 @@ function HintPopup({
         zIndex: 20,
         background: "#1a1510",
         border: "1px solid #a69272",
+        boxSizing: "border-box",
         boxShadow: "0 8px 32px rgba(0,0,0,0.95)",
         padding: "12px 16px",
         maxWidth: 340,
@@ -219,7 +231,7 @@ function HomeView({ onOpenModule }: { onOpenModule: (mod: string) => void }) {
       title: "Knight Navigator",
       num: "Bonus",
       locked: false,
-      desc: "Find the fastest knight route from start to target square.",
+      desc: "Find the absolute fastest route to the target location before time expires.",
     },
   ];
 
@@ -625,7 +637,7 @@ function VisionGameView({ onBack }: { onBack: () => void }) {
                   cursor: "pointer",
                 }}
               >
-                ⟳ Play Again
+                ⟲ Play Again
               </button>
             </div>
           )}
@@ -638,13 +650,34 @@ function VisionGameView({ onBack }: { onBack: () => void }) {
 // ── KNIGHT NAVIGATOR VIEW ─────────────────────────────────────────────────────
 function KnightNavigatorView({ onBack }: { onBack: () => void }) {
   const [boardSize, setBoardSize] = useState(500);
+  const [globalTimeLeft, setGlobalTimeLeft] = useState(120); // 2 Minutes
+  const [turnTimeLeft, setTurnTimeLeft] = useState(10); // 10s per position
+  const [gameState, setGameState] = useState<"intro" | "playing" | "analysis" | "mistakeReview">("intro");
+  
+  // Scoring Metrics
+  const [score, setScore] = useState(0);
+  const [gameHistory, setGameHistory] = useState<KnightPuzzle[]>([]);
+  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(0);
+  
+  // Current Live Puzzle Session Variables
   const [startSq, setStartSq] = useState("a1");
   const [targetSq, setTargetSq] = useState("h8");
   const [currentSq, setCurrentSq] = useState("a1");
   const [path, setPath] = useState<string[]>(["a1"]);
-  const [par, setPar] = useState(0);
-  const [gameState, setGameState] = useState<"playing" | "won">("playing");
+  const [wrongSquare, setWrongSquare] = useState<string | null>(null);
   const [boardOrientation, setBoardOrientation] = useState<"white" | "black">("white");
+  const [knightColor, setKnightColor] = useState<"w" | "b">("w");
+
+  // Effect Triggers for robust state transitions
+  const [newPuzzleTrigger, setNewPuzzleTrigger] = useState(0);
+  const [mistakeReviewTrigger, setMistakeReviewTrigger] = useState(0);
+
+  // State Ref for stable interval closures
+  const stateRef = useRef({ currentSq, startSq, targetSq, path, gameHistory, currentHistoryIndex, wrongSquare, gameState });
+  
+  useEffect(() => {
+    stateRef.current = { currentSq, startSq, targetSq, path, gameHistory, currentHistoryIndex, wrongSquare, gameState };
+  });
 
   useEffect(() => {
     function resize() {
@@ -656,23 +689,80 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  const getShortestPathLength = (start: string, end: string) => {
-    const queue: [string, number][] = [[start, 0]];
+  // Secure dual timer interval mechanism
+  useEffect(() => {
+    if (gameState !== "playing" && gameState !== "mistakeReview") return;
+
+    const interval = setInterval(() => {
+      const st = stateRef.current;
+      
+      if (st.gameState === "playing") {
+        setGlobalTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setGameState("analysis");
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
+
+      setTurnTimeLeft((prev) => {
+        // Freeze timer gracefully if puzzle has concluded
+        if (st.currentSq === st.targetSq || st.wrongSquare) return prev; 
+        
+        if (prev <= 1) {
+          const shortestPath = calculateShortestPathArray(st.currentSq, st.targetSq);
+          const fullCorrect = [...st.path.slice(0, -1), ...shortestPath];
+
+          const finalizedPuzzle: KnightPuzzle = {
+            startSq: st.startSq,
+            targetSq: st.targetSq,
+            par: calculateShortestPathLength(st.startSq, st.targetSq),
+            userPath: [...st.path],
+            correctPath: fullCorrect,
+            status: "failed",
+          };
+
+          setGameHistory((gh) => [...gh, finalizedPuzzle]);
+
+          if (st.gameState === "mistakeReview") {
+            setMistakeReviewTrigger((t) => t + 1);
+          } else {
+            setNewPuzzleTrigger((t) => t + 1);
+          }
+          return 10;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState]);
+
+  useEffect(() => {
+    if (newPuzzleTrigger > 0) generateNewPuzzle();
+  }, [newPuzzleTrigger]);
+
+  useEffect(() => {
+    if (mistakeReviewTrigger > 0) advanceMistakeReview();
+  }, [mistakeReviewTrigger]);
+
+  const calculateShortestPathLength = (start: string, end: string) => {
+    return calculateShortestPathArray(start, end).length - 1;
+  };
+
+  const calculateShortestPathArray = (start: string, end: string): string[] => {
+    const queue: [string, string[]][] = [[start, [start]]];
     const visited = new Set([start]);
     const moves = [
-      [1, 2],
-      [1, -2],
-      [-1, 2],
-      [-1, -2],
-      [2, 1],
-      [2, -1],
-      [-2, 1],
-      [-2, -1],
+      [1, 2], [1, -2], [-1, 2], [-1, -2],
+      [2, 1], [2, -1], [-2, 1], [-2, -1],
     ];
 
     while (queue.length > 0) {
-      const [curr, dist] = queue.shift()!;
-      if (curr === end) return dist;
+      const [curr, currentPath] = queue.shift()!;
+      if (curr === end) return currentPath;
 
       const file = curr.charCodeAt(0) - 97;
       const rank = Number(curr[1]) - 1;
@@ -684,13 +774,32 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
           const next = String.fromCharCode(97 + nf) + (nr + 1);
           if (!visited.has(next)) {
             visited.add(next);
-            queue.push([next, dist + 1]);
+            queue.push([next, [...currentPath, next]]);
           }
         }
       }
     }
+    return [start];
+  };
 
-    return 0;
+  const getKnightFen = (sq: string, color: "w" | "b" = "w") => {
+    if (!sq || sq.length !== 2) return EMPTY_FEN;
+    const file = sq.charCodeAt(0) - 97;
+    const rank = parseInt(sq[1]) - 1;
+    let fen = "";
+    const piece = color === "w" ? "N" : "n";
+    
+    for (let r = 7; r >= 0; r--) {
+      if (r === rank) {
+        const emptyBefore = file;
+        const emptyAfter = 7 - file;
+        fen += (emptyBefore > 0 ? emptyBefore : "") + piece + (emptyAfter > 0 ? emptyAfter : "");
+      } else {
+        fen += "8";
+      }
+      if (r > 0) fen += "/";
+    }
+    return fen + " w - - 0 1";
   };
 
   const randomSquare = () => {
@@ -698,22 +807,30 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
     return files[Math.floor(Math.random() * 8)] + (Math.floor(Math.random() * 8) + 1);
   };
 
-  const newGame = () => {
-    let s = randomSquare();
-    let t = randomSquare();
+  const startMainGame = () => {
+    setScore(0);
+    setGlobalTimeLeft(120);
+    setGameHistory([]);
+    setGameState("playing");
+    setupNewPuzzleData();
+  };
+
+  const setupNewPuzzleData = (chosenStart?: string, chosenTarget?: string) => {
+    let s = chosenStart || randomSquare();
+    let t = chosenTarget || randomSquare();
     while (t === s) t = randomSquare();
 
     setStartSq(s);
     setTargetSq(t);
     setCurrentSq(s);
     setPath([s]);
-    setPar(getShortestPathLength(s, t));
-    setGameState("playing");
+    setWrongSquare(null);
+    setTurnTimeLeft(10);
   };
 
-  useEffect(() => {
-    newGame();
-  }, []);
+  const generateNewPuzzle = () => {
+    setupNewPuzzleData();
+  };
 
   const isKnightMove = (from: string, to: string) => {
     const fD = Math.abs(to.charCodeAt(0) - from.charCodeAt(0));
@@ -722,28 +839,163 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
   };
 
   const handleSquareClick = (sq: string) => {
-    if (gameState === "won") return;
-    if (!isKnightMove(currentSq, sq)) return;
+    if (gameState !== "playing" && gameState !== "mistakeReview") return;
+    if (wrongSquare || currentSq === targetSq) return;
+
+    if (!isKnightMove(currentSq, sq)) {
+      triggerWrongMove(sq);
+      return;
+    }
+
+    const expectedDist = calculateShortestPathLength(currentSq, targetSq);
+    const newDist = calculateShortestPathLength(sq, targetSq);
+
+    if (newDist >= expectedDist) {
+      triggerWrongMove(sq);
+      return;
+    }
 
     const nextPath = [...path, sq];
     setPath(nextPath);
     setCurrentSq(sq);
 
     if (sq === targetSq) {
-      setGameState("won");
+      const finalPuzzleRecord: KnightPuzzle = {
+        startSq,
+        targetSq,
+        par: calculateShortestPathLength(startSq, targetSq),
+        userPath: nextPath,
+        correctPath: nextPath,
+        status: "correct",
+      };
+
+      setGameHistory((prev) => [...prev, finalPuzzleRecord]);
+      if (gameState !== "mistakeReview") setScore((s) => s + 1);
+
+      setTimeout(() => {
+        if (stateRef.current.gameState === "mistakeReview") {
+          setMistakeReviewTrigger(t => t + 1);
+        } else {
+          setNewPuzzleTrigger(t => t + 1);
+        }
+      }, 600);
     }
   };
 
-  const customSquareStyles: Record<string, CSSProperties> = {
-    [startSq]: { backgroundColor: "rgba(90, 130, 200, 0.45)" },
-    [targetSq]: { backgroundColor: "rgba(180, 150, 80, 0.6)" },
-    [currentSq]: { backgroundColor: "rgba(100, 200, 100, 0.5)" },
+  const triggerWrongMove = (sq: string) => {
+    setWrongSquare(sq);
+    const shortestRem = calculateShortestPathArray(currentSq, targetSq);
+    const finalizedCorrectPath = [...path.slice(0, -1), ...shortestRem];
+
+    const finalPuzzleRecord: KnightPuzzle = {
+      startSq,
+      targetSq,
+      par: calculateShortestPathLength(startSq, targetSq),
+      userPath: [...path, sq],
+      correctPath: finalizedCorrectPath,
+      status: "failed",
+    };
+
+    setGameHistory((prev) => [...prev, finalPuzzleRecord]);
+
+    setTimeout(() => {
+      if (stateRef.current.gameState === "mistakeReview") {
+        setMistakeReviewTrigger(t => t + 1);
+      } else {
+        setNewPuzzleTrigger(t => t + 1);
+      }
+    }, 1200);
   };
 
+  const startMistakeReviewLoop = () => {
+    const failedIndices = gameHistory.map((p, i) => (p.status === "failed" ? i : -1)).filter((i) => i !== -1);
+    if (failedIndices.length === 0) return;
+
+    setGameState("mistakeReview");
+    setCurrentHistoryIndex(failedIndices[0]);
+    const targetPuzzle = gameHistory[failedIndices[0]];
+    setupNewPuzzleData(targetPuzzle.startSq, targetPuzzle.targetSq);
+  };
+
+  const advanceMistakeReview = () => {
+    const historyRef = stateRef.current.gameHistory;
+    const failedIndices = historyRef.map((p, i) => (p.status === "failed" ? i : -1)).filter((i) => i !== -1);
+    const currentSubIndex = failedIndices.indexOf(currentHistoryIndex);
+
+    if (currentSubIndex !== -1 && currentSubIndex + 1 < failedIndices.length) {
+      const nextIdx = failedIndices[currentSubIndex + 1];
+      setCurrentHistoryIndex(nextIdx);
+      const targetPuzzle = historyRef[nextIdx];
+      setupNewPuzzleData(targetPuzzle.startSq, targetPuzzle.targetSq);
+    } else {
+      setGameState("analysis");
+      setCurrentHistoryIndex(0);
+    }
+  };
+
+  const customSquareStyles = useMemo(() => {
+    const styles: Record<string, CSSProperties> = {};
+
+    if (gameState === "playing" || gameState === "mistakeReview") {
+      styles[startSq] = { backgroundColor: "rgba(90, 130, 200, 0.4)" };
+      styles[currentSq] = { backgroundColor: "rgba(86, 163, 100, 0.4)" };
+      
+      styles[targetSq] = { 
+        backgroundColor: "rgba(217, 180, 100, 0.8)",
+        border: "3px solid #e0c98b",
+        boxShadow: "inset 0 0 15px rgba(255,215,0,0.5)",
+        animation: "pulseHouseGlow 1.5s infinite alternate ease-in-out",
+        boxSizing: "border-box"
+      };
+
+      path.forEach((sq) => {
+        styles[sq] = { backgroundColor: "rgba(86, 163, 100, 0.55)", border: "1px solid #56a364" };
+      });
+
+      if (wrongSquare) {
+        styles[wrongSquare] = { backgroundColor: "rgba(204, 82, 82, 0.85)", border: "2px solid #cc5252" };
+      }
+    } else if (gameState === "analysis" && gameHistory.length > 0) {
+      const currentActiveRecord = gameHistory[currentHistoryIndex];
+      if (currentActiveRecord) {
+        styles[currentActiveRecord.startSq] = { backgroundColor: "rgba(90, 130, 200, 0.5)" };
+        styles[currentActiveRecord.targetSq] = { backgroundColor: "rgba(217, 203, 158, 0.6)", border: "2px solid #ebdcb9" };
+      }
+    }
+
+    return styles;
+  }, [gameState, currentSq, startSq, targetSq, path, wrongSquare, gameHistory, currentHistoryIndex]);
+
+  const analysisCustomArrows = useMemo(() => {
+    if (gameState !== "analysis" || gameHistory.length === 0) return [];
+    const currentActiveRecord = gameHistory[currentHistoryIndex];
+    if (!currentActiveRecord) return [];
+
+    const arrows: Array<[string, string, string]> = [];
+    const pathArr = currentActiveRecord.correctPath;
+    for (let i = 0; i < pathArr.length - 1; i++) {
+      arrows.push([pathArr[i], pathArr[i + 1], "#64d282"]);
+    }
+    return arrows;
+  }, [gameState, gameHistory, currentHistoryIndex]);
+
   const innerSize = boardSize - BOARD_BORDER * 2;
+  const failedPuzzlesCount = gameHistory.filter((p) => p.status === "failed").length;
+  
+  const activeFen = gameState === "analysis" ? EMPTY_FEN : getKnightFen(currentSq, knightColor);
 
   return (
     <div style={{ ...S.page, flexDirection: "column", alignItems: "center", paddingTop: 16 }}>
+      <style>
+        {`
+          @keyframes pulseHouseGlow {
+            0% { box-shadow: inset 0 0 0 2px #ebdcb9, inset 0 0 8px rgba(235, 220, 185, 0.3); background-color: rgba(217, 180, 100, 0.5); }
+            50% { box-shadow: inset 0 0 0 4px #ebdcb9, inset 0 0 16px rgba(235, 220, 185, 0.8); background-color: rgba(217, 180, 100, 0.9); }
+            100% { box-shadow: inset 0 0 0 2px #ebdcb9, inset 0 0 8px rgba(235, 220, 185, 0.3); background-color: rgba(217, 180, 100, 0.5); }
+          }
+        `}
+      </style>
+
       <button
         type="button"
         onClick={onBack}
@@ -769,61 +1021,196 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
           Knight Navigator
         </h1>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={S.badge}>Start: {startSq.toUpperCase()}</div>
-          <button
-            type="button"
-            style={S.toolBtn}
-            onClick={() =>
-              setBoardOrientation((prev) => (prev === "white" ? "black" : "white"))
-            }
-          >
-            ⟲ Flip Board
-          </button>
-          <div style={S.badge}>Target: {targetSq.toUpperCase()}</div>
-        </div>
+        {/* ── INTRO VIEW SCREEN ── */}
+        {gameState === "intro" && (
+          <div style={{ background: "#1c1712", border: "1px solid #362f25", padding: "24px", textAlign: "center" }}>
+            <p style={{ color: "#d9cb9e", fontSize: 15, lineHeight: "1.6", marginBottom: 20 }}>
+              <strong>How to Play:</strong> Click the squares to navigate your knight from Start to Target along the absolute fastest path. You have exactly 10 seconds per puzzle and 2 minutes total!
+            </p>
 
-        <div
-          style={{
-            position: "relative",
-            width: boardSize,
-            height: boardSize,
-            border: `${BOARD_BORDER}px solid #26211a`,
-            boxSizing: "border-box",
-            flexShrink: 0,
-            outline: "1px solid #ebdcb9",
-            boxShadow: "0 16px 36px rgba(0,0,0,0.9)",
-          }}
-        >
-          <Chessboard
-            key={`knight-board-${boardOrientation}`}
-            position={EMPTY_FEN}
-            boardWidth={innerSize}
-            boardOrientation={boardOrientation}
-            arePiecesDraggable={false}
-            onSquareClick={handleSquareClick}
-            customBoardStyle={{ borderRadius: 0 }}
-            customLightSquareStyle={{ backgroundColor: "#d9cb9e" }}
-            customDarkSquareStyle={{ backgroundColor: "#403425" }}
-            customSquareStyles={customSquareStyles}
-          />
-        </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 24, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={{ ...S.toolBtn, padding: "8px 16px", fontSize: 12 }}
+                onClick={() => setKnightColor((p) => (p === "w" ? "b" : "w"))}
+              >
+                Piece: {knightColor === "w" ? "♘ White" : "♞ Black"}
+              </button>
+              <button
+                type="button"
+                style={{ ...S.toolBtn, padding: "8px 16px", fontSize: 12 }}
+                onClick={() => setBoardOrientation((p) => (p === "white" ? "black" : "white"))}
+              >
+                Board: {boardOrientation === "white" ? "White at Bottom" : "Black at Bottom"}
+              </button>
+            </div>
 
-        <div style={{ marginTop: 14, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-          <span style={S.badge}>Moves: {path.length - 1}</span>
-          <span style={S.badge}>Par: {par}</span>
-          {gameState === "won" && (
-            <span style={{ ...S.badge, color: "#a3b39c", borderColor: "#41543b", background: "#1d2619" }}>
-              Goal Reached!
-            </span>
-          )}
-        </div>
+            <button type="button" onClick={startMainGame} style={{ ...S.sfBtn, fontSize: 14, padding: "10px 20px" }}>
+              ▶ Start Mission
+            </button>
+          </div>
+        )}
 
-        <div style={{ marginTop: 12 }}>
-          <button type="button" onClick={newGame} style={S.sfBtn}>
-            ⟳ New Puzzle
-          </button>
-        </div>
+        {/* ── LIVE INTERACTIVE GAME VIEW ── */}
+        {(gameState === "playing" || gameState === "mistakeReview") && (
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={S.badge}>
+                {gameState === "mistakeReview" ? "MISTAKE REVIEW" : `GLOBAL TIME: ${Math.floor(globalTimeLeft / 60)}:${(globalTimeLeft % 60).toString().padStart(2, "0")}`}
+              </div>
+              
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  style={S.toolBtn}
+                  onClick={() => setKnightColor((p) => (p === "w" ? "b" : "w"))}
+                  title="Switch Knight Color"
+                >
+                  {knightColor === "w" ? "♘" : "♞"}
+                </button>
+                <button
+                  type="button"
+                  style={S.toolBtn}
+                  onClick={() => setBoardOrientation((p) => (p === "white" ? "black" : "white"))}
+                >
+                  ⟲ Flip
+                </button>
+              </div>
+
+              <div style={S.badge}>SCORE: {score}</div>
+            </div>
+
+            <div style={{ width: "100%", height: 6, background: "#26211a", marginBottom: 14, overflow: "hidden" }}>
+              <div 
+                style={{ 
+                  width: `${(turnTimeLeft / 10) * 100}%`, 
+                  height: "100%", 
+                  background: turnTimeLeft <= 3 ? "#cc5252" : "#ad9e87",
+                  transition: "width 1s linear"
+                }} 
+              />
+            </div>
+
+            <div
+              style={{
+                position: "relative",
+                width: boardSize,
+                height: boardSize,
+                border: `${BOARD_BORDER}px solid #26211a`,
+                boxSizing: "border-box",
+                flexShrink: 0,
+                outline: "1px solid #ebdcb9",
+                boxShadow: "0 16px 36px rgba(0,0,0,0.9)",
+              }}
+            >
+              <Chessboard
+                key={`knight-navigator-board-${boardOrientation}`}
+                position={activeFen}
+                boardWidth={innerSize}
+                boardOrientation={boardOrientation}
+                arePiecesDraggable={false}
+                onSquareClick={handleSquareClick}
+                customBoardStyle={{ borderRadius: 0 }}
+                customLightSquareStyle={{ backgroundColor: "#d9cb9e" }}
+                customDarkSquareStyle={{ backgroundColor: "#403425" }}
+                customSquareStyles={customSquareStyles}
+              />
+            </div>
+
+            <div style={{ marginTop: 14, display: "flex", gap: 12, justifyContent: "center" }}>
+              <span style={S.badge}>Current Position: {currentSq.toUpperCase()}</span>
+              <span style={S.badge}>Target Castle: {targetSq.toUpperCase()}</span>
+            </div>
+          </>
+        )}
+
+        {/* ── ANALYSIS & POST GAME WRAP UP VIEW ── */}
+        {gameState === "analysis" && gameHistory.length > 0 && (
+          <div style={{ background: "#1c1712", border: "1px solid #362f25", padding: "16px", boxSizing: "border-box" }}>
+            <h2 style={{ color: "#d9cb9e", fontSize: 20, margin: "0 0 12px 0" }}>Mission Report Card</h2>
+            
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <span style={S.badge}>Total Puzzles: {gameHistory.length}</span>
+              <span style={{ ...S.badge, color: "#a3b39c" }}>Success Ratio: {score} Correct</span>
+              <span style={{ ...S.badge, color: "#cc9999" }}>Missed: {failedPuzzlesCount} Positions</span>
+            </div>
+
+            <div
+              style={{
+                position: "relative",
+                width: boardSize,
+                height: boardSize,
+                border: `${BOARD_BORDER}px solid #26211a`,
+                boxSizing: "border-box",
+                margin: "0 auto 16px auto",
+                outline: "1px solid #ebdcb9",
+              }}
+            >
+              <Chessboard
+                key={`analysis-board-${currentHistoryIndex}`}
+                position={EMPTY_FEN}
+                boardWidth={innerSize}
+                boardOrientation={boardOrientation}
+                arePiecesDraggable={false}
+                customBoardStyle={{ borderRadius: 0 }}
+                customLightSquareStyle={{ backgroundColor: "#d9cb9e" }}
+                customDarkSquareStyle={{ backgroundColor: "#403425" }}
+                customSquareStyles={customSquareStyles}
+                customArrows={analysisCustomArrows}
+              />
+            </div>
+
+            <p style={{ color: "#a69272", fontSize: 13, margin: "0 0 12px 0" }}>
+              Reviewing Puzzle {currentHistoryIndex + 1} of {gameHistory.length} ({gameHistory[currentHistoryIndex]?.status.toUpperCase()})
+            </p>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <button
+                type="button"
+                style={S.navBtn}
+                disabled={currentHistoryIndex === 0}
+                onClick={() => setCurrentHistoryIndex((i) => i - 1)}
+              >
+                ← Back
+              </button>
+              
+              <button
+                type="button"
+                style={S.sfBtn}
+                onClick={startMainGame}
+              >
+                ⟲ Try Again
+              </button>
+
+              {failedPuzzlesCount > 0 && (
+                <button
+                  type="button"
+                  style={{ ...S.nextBtn, marginTop: 4 }}
+                  onClick={startMistakeReviewLoop}
+                >
+                  🚀 Review Mistakes ({failedPuzzlesCount})
+                </button>
+              )}
+
+              <button
+                type="button"
+                style={S.navBtn}
+                disabled={currentHistoryIndex === gameHistory.length - 1}
+                onClick={() => setCurrentHistoryIndex((i) => i + 1)}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {gameState === "analysis" && gameHistory.length === 0 && (
+          <div style={{ background: "#1c1712", border: "1px solid #362f25", padding: "20px" }}>
+            <p style={{ color: "#d9cb9e", marginBottom: 12 }}>Time ran out before any modules were finalized.</p>
+            <button type="button" onClick={startMainGame} style={S.sfBtn}>⟲ Start Over</button>
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -1056,7 +1443,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
   }
 
   function startSfPlay() {
-    const startingFen = lesson.startFen || FALLBACK_FEN;
+    const startingFen = fen; // Use the currently viewed FEN from the lesson history
     setSfPlayFen(startingFen);
     sfPlayFenRef.current = startingFen;
     setSfPlayMode(true);
@@ -1075,7 +1462,6 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     }
   }
 
-  // Sync validator + async engine response (safe for react-chessboard onPieceDrop)
   function onSfPieceDropSync(src: string, tgt: string): boolean {
     if (sfWaiting) return false;
 
@@ -1456,7 +1842,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                     setCoachSays("Study the position. Make your move.");
                   }}
                 >
-                  ← Back
+                  ← Back to Lesson
                 </button>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1561,6 +1947,43 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                   </div>
                 )}
 
+                {/* THE EXPLICIT TOGGLE OPTIONS */}
+                {!finished && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 4 }}>
+                    <button
+                      style={{
+                        ...S.sfBtn,
+                        flex: 1,
+                        marginTop: 0,
+                        padding: "8px",
+                        background: !sfPlayMode ? "#2b231a" : "#1a1f2e",
+                        borderColor: !sfPlayMode ? "#a69272" : "#2e3f5e",
+                        color: !sfPlayMode ? "#d9cb9e" : "#8aadcc",
+                      }}
+                      onClick={() => {
+                        setSfPlayMode(false);
+                        setCoachSays(activeSession.currentStep?.hint ?? "Study the position. Make your move.");
+                      }}
+                    >
+                      📖 Learn
+                    </button>
+                    <button
+                      style={{
+                        ...S.sfBtn,
+                        flex: 1,
+                        marginTop: 0,
+                        padding: "8px",
+                        background: sfPlayMode ? "#2b231a" : "#1a1f2e",
+                        borderColor: sfPlayMode ? "#a69272" : "#2e3f5e",
+                        color: sfPlayMode ? "#d9cb9e" : "#8aadcc",
+                      }}
+                      onClick={startSfPlay}
+                    >
+                      ♟ Play from position
+                    </button>
+                  </div>
+                )}
+
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", paddingTop: 2 }}>
                   {safeSteps.map((_, i: number) => (
                     <div
@@ -1607,12 +2030,6 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                       </button>
                     )}
                   </>
-                )}
-
-                {!finished && lessonMode === "lecture" && !sfPlayMode && (
-                  <button style={{ ...S.sfBtn, marginTop: 4 }} onClick={startSfPlay}>
-                    ♟ Play from this position
-                  </button>
                 )}
               </div>
 
@@ -1884,7 +2301,7 @@ const S: Record<string, CSSProperties> = {
     background: "#1c1712",
     border: "1px solid #362f25",
     borderRadius: 0,
-    padding: "2px 6px",
+    padding: "4px 8px",
     fontFamily: "Georgia, serif",
   },
   themeBadge: {
