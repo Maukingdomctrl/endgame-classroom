@@ -1,15 +1,3 @@
-/**
- * session.ts
- *
- * FIXES vs original:
- * 1. Opponent reply: stepIndex advances INSIDE the setTimeout, so React state
- *    reads the correct index after the delay. Previously stepIndex was set
- *    synchronously but the FEN update happened async — causing a one-step offset.
- * 2. tryMove returns the opponent-reply FEN in the result so App can update
- *    the board without a race condition.
- * 3. Cleaner mode typing.
- */
-
 import { Chess } from "chess.js";
 import type { RawLesson, LessonStep } from "../modules/module1/loader";
 
@@ -30,12 +18,10 @@ export interface MoveResult {
   finished?:     boolean;
   autoAdvance?:  boolean;
   correctMove?:  string;
-  // opponent reply info — set when there is a reply queued
   hasReply?:     boolean;
-  replyDelay?:   number;     // ms before reply fires
+  replyDelay?:   number;
 }
 
-// Callback App uses to receive the opponent reply FEN + step
 export type ReplyCallback = (fen: string, stepIndex: number) => void;
 
 export class Session {
@@ -44,6 +30,12 @@ export class Session {
   game:                  Chess;
   awaitingOpponentReply: boolean = false;
   private replyTimer:    ReturnType<typeof setTimeout> | null = null;
+  
+  private _pendingReply: {
+    step:          LessonStep;
+    nextIdx:       number;
+    playerFen:     string;
+  } | null = null;
 
   constructor(lesson: RawLesson) {
     this.lesson    = lesson;
@@ -54,12 +46,17 @@ export class Session {
   reset(): void {
     this.stepIndex             = 0;
     this.awaitingOpponentReply = false;
+    this._pendingReply         = null;
     if (this.replyTimer) { clearTimeout(this.replyTimer); this.replyTimer = null; }
     this.game = new Chess(normalizeFen(this.lesson.startFen ?? "4k3/8/8/8/8/8/8/4K3 w - - 0 1"));
   }
 
   get currentStep(): LessonStep | null {
-    return this.lesson?.steps?.[this.stepIndex] ?? null;
+    // FIX BUG-SS-3: Safely bound check against length so it doesn't throw or return bad data when finished
+    if (!this.lesson?.steps || this.stepIndex >= this.lesson.steps.length) {
+      return null;
+    }
+    return this.lesson.steps[this.stepIndex];
   }
 
   get mode(): "lecture" | "puzzle" | "free" {
@@ -70,22 +67,20 @@ export class Session {
     return this.stepIndex >= (this.lesson?.steps?.length ?? 0);
   }
 
-  /**
-   * Try a move. Returns a MoveResult.
-   * If hasReply is true, caller should call scheduleReply() with a callback.
-   */
   tryMove(from: string, to: string): MoveResult {
     if (this.isFinished() || this.awaitingOpponentReply) {
       return { ok: false, feedback: "Not ready for a move." };
     }
 
-    const step         = this.lesson.steps[this.stepIndex];
-    const playerColor: "w" | "b"   = this.lesson.sideToMove === "black" ? "b" : "w";
-    const opponentColor: "w" | "b" = playerColor === "w" ? "b" : "w";
+    const step = this.currentStep;
+    if (!step) {
+      return { ok: false, feedback: "No active step available." };
+    }
 
     let game: Chess;
     try {
-      game = new Chess(normalizeFen(this.game.fen(), playerColor));
+      // FIX BUG-SS-1: Stop overriding the turn color, use the natural fen state
+      game = new Chess(this.game.fen());
     } catch {
       return { ok: false, feedback: "Corrupted board position." };
     }
@@ -99,7 +94,6 @@ export class Session {
       return { ok: false, feedback: "Illegal move." };
     }
 
-    // ── Validate against expected ─────────────────────────────────────────────
     const rawExpected  = step.correctMove
       .replace(/[+#x=?!\s]/g, "")
       .replace(/[QRBNqrbn]$/, "");
@@ -111,11 +105,11 @@ export class Session {
     const fromMatches  = expectedFrom === null || move.from.toLowerCase() === expectedFrom;
     const isCorrect    = toMatches && fromMatches;
 
-    // ── LECTURE MODE auto-correct ─────────────────────────────────────────────
     if (!isCorrect && this.mode === "lecture") {
       let correctedGame: Chess;
       try {
-        correctedGame = new Chess(normalizeFen(this.game.fen(), playerColor));
+        // FIX BUG-SS-1: No override turn
+        correctedGame = new Chess(this.game.fen());
         correctedGame.move(step.correctMove);
       } catch {
         return { ok: false, feedback: "Could not apply correction." };
@@ -129,7 +123,7 @@ export class Session {
         ? `The correct move is ${step.correctMove}. ${step.hint}`
         : `The correct move is ${step.correctMove}.`;
 
-      const hasReply = this._prepareReply(step, nextIdx, opponentColor, correctedGame.fen(), isDone);
+      const hasReply = this._prepareReply(step, nextIdx, correctedGame.fen(), isDone);
 
       return {
         ok:          true,
@@ -142,17 +136,15 @@ export class Session {
       };
     }
 
-    // ── PUZZLE MODE wrong move rejected ───────────────────────────────────────
     if (!isCorrect) {
       return { ok: false, feedback: "Not quite right. Try again." };
     }
 
-    // ── Correct move ──────────────────────────────────────────────────────────
     this.game     = game;
     const nextIdx = this.stepIndex + 1;
     const isDone  = nextIdx >= this.lesson.steps.length;
 
-    const hasReply = this._prepareReply(step, nextIdx, opponentColor, game.fen(), isDone);
+    const hasReply = this._prepareReply(step, nextIdx, game.fen(), isDone);
 
     return {
       ok:          true,
@@ -164,49 +156,39 @@ export class Session {
     };
   }
 
-  /**
-   * Prepares (but does NOT schedule) the opponent reply.
-   * Returns true if there is a reply to schedule.
-   * App calls scheduleReply() with a callback to get the FEN update.
-   */
   private _prepareReply(
-    step:          LessonStep,
-    nextIdx:       number,
-    opponentColor: "w" | "b",
-    playerFen:     string,
-    isDone:        boolean,
+    step:      LessonStep,
+    nextIdx:   number,
+    playerFen: string,
+    isDone:    boolean,
   ): boolean {
     if (step.opponentReply && !isDone) {
       this.awaitingOpponentReply = true;
-      // Store the reply context for scheduleReply()
-      this._pendingReply = { step, nextIdx, opponentColor, playerFen };
+      // FIX BUG-SS-4: Do not queue an opponentColor override. Save the natural FEN.
+      this._pendingReply = { step, nextIdx, playerFen };
       return true;
     }
-    // No reply — advance immediately
     this.stepIndex = nextIdx;
     return false;
   }
 
-  private _pendingReply: {
-    step:          LessonStep;
-    nextIdx:       number;
-    opponentColor: "w" | "b";
-    playerFen:     string;
-  } | null = null;
-
-  /**
-   * Call this after tryMove if hasReply is true.
-   * Schedules the opponent reply and calls back with the resulting FEN and stepIndex.
-   */
   scheduleReply(delayMs: number, onReply: ReplyCallback): void {
-    if (!this._pendingReply) return;
-    const { step, nextIdx, opponentColor, playerFen } = this._pendingReply;
+    // FIX BUG-SS-2: Early exit unlocks awaitingOpponentReply so game isn't permanently frozen
+    if (!this._pendingReply) {
+      this.awaitingOpponentReply = false;
+      return;
+    }
+    
+    const { step, nextIdx, playerFen } = this._pendingReply;
     this._pendingReply = null;
 
     this.replyTimer = setTimeout(() => {
       try {
-        const opp     = step.opponentReply!;
-        const oppGame = new Chess(normalizeFen(playerFen, opponentColor));
+        const opp = step.opponentReply!;
+        
+        // FIX BUG-SS-4: playerFen naturally contains the opponent's turn to move
+        const oppGame = new Chess(playerFen);
+        
         if (opp.from && opp.to) {
           oppGame.move({ from: opp.from, to: opp.to, promotion: "q" });
         } else if (opp.move) {

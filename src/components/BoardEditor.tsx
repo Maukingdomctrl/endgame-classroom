@@ -11,6 +11,9 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Chessboard }  from "react-chessboard";
 import { Chess }       from "chess.js";
 import type { RawLesson, LessonStep } from "../modules/module1/loader";
+
+// FIX Issue 2: Import loadAllModules and getModuleData
+import { loadAllModules, getModuleData } from "../modules/moduleLoader";
 import { lessonToPgn } from "../engine/lessonToPgn";
 
 // ── Piece palette ─────────────────────────────────────────────────────────────
@@ -140,18 +143,53 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
     });
   }
 
+  // FIX Issue 3: Safely merge the draft lesson back into the full module array to prevent wiping siblings
+  function updateAndExportModulePgn(updatedLesson: RawLesson, modId: string): string {
+    const fullModule = getModuleData(modId);
+    if (!fullModule || !fullModule.lessons) {
+      // Fallback: If we can't find the module, just serialize the single lesson
+      return lessonToPgn(updatedLesson);
+    }
+
+    // Map through the existing lessons, replacing the old version of THIS lesson with the draft
+    const updatedLessonsList = fullModule.lessons.map((l: RawLesson) => 
+      l.id === updatedLesson.id ? updatedLesson : l
+    );
+
+    // Serialize ALL lessons in the module, appending them with double newlines
+    return updatedLessonsList.map((l: RawLesson) => lessonToPgn(l)).join("\n\n");
+  }
+
   async function save() {
     setSaving(true); setSaveMsg("");
     try {
-      const pgnText = lessonToPgn(draft);
-      const res = await fetch("http://localhost:5174/api/save-pgn", {
+      // Generate the unified PGN text containing all lessons for this module
+      const combinedPgnText = updateAndExportModulePgn(draft, moduleId);
+      
+      // Override the auto-generated filename to target the primary module file
+      // Note: If you eventually implement multi-file modules, this logic will need to track origin files
+      const moduleTargetFilename = "0001-endgame-lessons";
+
+      // FIX Issue 1: Using relative /api path
+      const res = await fetch("/api/save-pgn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ moduleId, filename, pgnText }),
+        body: JSON.stringify({ moduleId, filename: moduleTargetFilename, pgnText: combinedPgnText }),
       });
+      
       const data = await res.json();
-      if (data.ok) { setSaveMsg("✓ Saved"); onSaved(draft); }
-      else          { setSaveMsg("✗ Save failed"); }
+      
+      if (data.ok) { 
+        setSaveMsg("✓ Saved"); 
+        
+        // FIX Issue 2: Refresh the global cache so the UI updates immediately
+        await loadAllModules();
+        
+        onSaved(draft); 
+      }
+      else { 
+        setSaveMsg("✗ Save failed"); 
+      }
     } catch {
       setSaveMsg("✗ Sync server not running");
     } finally {

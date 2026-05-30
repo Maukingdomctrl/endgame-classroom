@@ -1,12 +1,10 @@
 /**
  * App.tsx — Endgame Classroom
- * Full rewrite featuring upgraded Knight Navigator mechanics:
- * - Option to play as the Black Knight or White Knight
- * - Pre-game setup toggles for orientation and piece color
- * - Dynamic FEN injection (Actually renders the Knight piece)
- * - Strict 10-second timer per complete puzzle 
- * - Global 2-minute timer with interval closure protection
- * - Explicit "Learn" and "Play from position" toggles in Classroom Mode
+ * Full rewrite featuring upgraded Knight Navigator mechanics & Native Hinting:
+ * - Native Tap-to-Move / Click-to-Move support for trackpads and mobile
+ * - Local fallback highlights for hints in Guided Mode (no Stockfish needed)
+ * - Explicit feedback when toggling between Learn and Play modes
+ * - Strict 10-second timer per complete Knight puzzle 
  */
 
 import {
@@ -19,10 +17,11 @@ import {
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { Session } from "../engine/session";
-import { getModuleData } from "../modules/moduleLoader";
+import { getModuleData, onModulesReloaded } from "../modules/moduleLoader";
 import { useStockfish } from "../engine/useStockfish";
 import EvalBar, { EVAL_W, EVAL_GAP } from "../components/EvalBar";
 import BoardEditor from "../components/BoardEditor";
+
 
 const BOARD_BORDER = 10;
 const FALLBACK_FEN = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
@@ -37,18 +36,72 @@ interface KnightPuzzle {
   status: "pending" | "correct" | "failed";
 }
 
+// ── Utility: Move to Instruction ──────────────────────────────────────────────
+function moveToInstruction(san: string, fen: string): string {
+  if (!san) return "";
+  try {
+    const game = new Chess(fen);
+    const m = game.move(san);
+    game.undo(); // Revert so the instance isn't permanently mutated
+
+    if (!m) return `Play ${san}`;
+
+    if (m.flags.includes("k")) return "Castle kingside.";
+    if (m.flags.includes("q")) return "Castle queenside.";
+
+    const pieces: Record<string, string> = {
+      p: "Pawn",
+      n: "Knight",
+      b: "Bishop",
+      r: "Rook",
+      q: "Queen",
+      k: "King",
+    };
+
+    const pieceName = pieces[m.piece] || "Piece";
+    const target = m.to;
+    const isCapture = m.flags.includes("c") || m.flags.includes("e");
+    const isPromotion = m.flags.includes("p") || m.promotion;
+
+    let instruction = isCapture
+      ? `${pieceName} captures on ${target}`
+      : `Move ${pieceName} to ${target}`;
+
+    if (isPromotion && m.promotion) {
+      const promoPiece = pieces[m.promotion.toLowerCase()] || "Queen";
+      instruction += ` and promote to ${promoPiece}`;
+    }
+
+    if (m.san.includes("#")) {
+      instruction += ", delivering checkmate!";
+    } else if (m.san.includes("+")) {
+      instruction += ", giving check.";
+    } else {
+      instruction += ".";
+    }
+
+    return instruction;
+  } catch (e) {
+    return `Play ${san}`;
+  }
+}
+
 // ── Board ─────────────────────────────────────────────────────────────────────
 function Board({
   fen,
   boardSize,
   onPieceDrop,
+  onSquareClick,
   hintSquares = [],
+  clickFromSquare = null,
   boardOrientation = "white",
 }: {
   fen: string;
   boardSize: number;
   onPieceDrop: (s: string, t: string) => boolean;
+  onSquareClick?: (sq: string) => void;
   hintSquares?: string[];
+  clickFromSquare?: string | null;
   boardOrientation?: "white" | "black";
 }) {
   const innerSize = boardSize - BOARD_BORDER * 2;
@@ -61,6 +114,13 @@ function Board({
       transition: "background-color 0.3s ease",
     };
   });
+
+  if (clickFromSquare) {
+    squareStyles[clickFromSquare] = {
+      ...squareStyles[clickFromSquare],
+      backgroundColor: "rgba(90, 130, 200, 0.6)",
+    };
+  }
 
   return (
     <div
@@ -79,6 +139,8 @@ function Board({
         key={`classroom-board-${boardOrientation}`}
         position={fen}
         onPieceDrop={onPieceDrop}
+        onSquareClick={onSquareClick}
+        arePiecesDraggable={true}
         boardWidth={innerSize}
         boardOrientation={boardOrientation}
         customBoardStyle={{ borderRadius: 0 }}
@@ -654,12 +716,10 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
   const [turnTimeLeft, setTurnTimeLeft] = useState(10); // 10s per position
   const [gameState, setGameState] = useState<"intro" | "playing" | "analysis" | "mistakeReview">("intro");
   
-  // Scoring Metrics
   const [score, setScore] = useState(0);
   const [gameHistory, setGameHistory] = useState<KnightPuzzle[]>([]);
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState(0);
   
-  // Current Live Puzzle Session Variables
   const [startSq, setStartSq] = useState("a1");
   const [targetSq, setTargetSq] = useState("h8");
   const [currentSq, setCurrentSq] = useState("a1");
@@ -668,16 +728,14 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
   const [boardOrientation, setBoardOrientation] = useState<"white" | "black">("white");
   const [knightColor, setKnightColor] = useState<"w" | "b">("w");
 
-  // Effect Triggers for robust state transitions
   const [newPuzzleTrigger, setNewPuzzleTrigger] = useState(0);
   const [mistakeReviewTrigger, setMistakeReviewTrigger] = useState(0);
 
-  // State Ref for stable interval closures
   const stateRef = useRef({ currentSq, startSq, targetSq, path, gameHistory, currentHistoryIndex, wrongSquare, gameState });
   
   useEffect(() => {
     stateRef.current = { currentSq, startSq, targetSq, path, gameHistory, currentHistoryIndex, wrongSquare, gameState };
-  });
+  }, [currentSq, startSq, targetSq, path, gameHistory, currentHistoryIndex, wrongSquare, gameState]);
 
   useEffect(() => {
     function resize() {
@@ -689,17 +747,15 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // Secure dual timer interval mechanism
   useEffect(() => {
-    if (gameState !== "playing" && gameState !== "mistakeReview") return;
-
     const interval = setInterval(() => {
       const st = stateRef.current;
+      
+      if (st.gameState !== "playing" && st.gameState !== "mistakeReview") return;
       
       if (st.gameState === "playing") {
         setGlobalTimeLeft((prev) => {
           if (prev <= 1) {
-            clearInterval(interval);
             setGameState("analysis");
             return 0;
           }
@@ -708,7 +764,6 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
       }
 
       setTurnTimeLeft((prev) => {
-        // Freeze timer gracefully if puzzle has concluded
         if (st.currentSq === st.targetSq || st.wrongSquare) return prev; 
         
         if (prev <= 1) {
@@ -738,7 +793,7 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [gameState]);
+  }, []);
 
   useEffect(() => {
     if (newPuzzleTrigger > 0) generateNewPuzzle();
@@ -1288,6 +1343,26 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     16
   );
 
+  const activeHintSquares = useMemo(() => {
+    if (!showHint && lessonMode !== "lecture") return [];
+    if (sfPlayMode) return hintSquares;
+
+    const step = lesson?.steps?.[currentStepIndex];
+    if (step && step.correctMove) {
+      if (step.from && step.to) {
+        return [step.from, step.to];
+      }
+      try {
+        const g = new Chess(fen);
+        const m = g.move(step.correctMove);
+        if (m) return [m.from, m.to];
+      } catch (e) {
+        // Ignore fallback errors
+      }
+    }
+    return [];
+  }, [showHint, sfPlayMode, hintSquares, lesson, currentStepIndex, fen, lessonMode]);
+
   useEffect(() => {
     if (!lesson || !currentModuleData) return;
 
@@ -1303,11 +1378,16 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     setShowHint(false);
     setSfPlayMode(false);
 
-    setCoachSays(
-      lessonMode === "lecture"
-        ? "Follow the demonstration. Play each move on the board."
-        : "Study the position. Make your move."
-    );
+    if (lessonMode === "lecture") {
+      const firstStep = sessionRef.current?.currentStep;
+      if (firstStep && firstStep.correctMove) {
+        setCoachSays(moveToInstruction(firstStep.correctMove, startFen));
+      } else {
+        setCoachSays("Follow the demonstration. Play each move on the board.");
+      }
+    } else {
+      setCoachSays("Study the position. Make your move.");
+    }
 
     const isPlayingBlack = studentSide === "Student";
     setBoardOrientation(isPlayingBlack ? "black" : "white");
@@ -1368,7 +1448,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
 
     const res = activeSession.tryMove(src, tgt);
     if (!res.ok) {
-      const txt = res.feedback ?? "Try again.";
+      const txt = res.feedback ?? "Incorrect move. Try again or use Hint.";
       setFeedback({ text: txt, ok: false });
       setCoachSays(txt);
       return false;
@@ -1381,6 +1461,16 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     setCurrentStepIndex(midIdx);
     setFeedback({ text: res.feedback!, ok: true });
     setCoachSays(res.feedback!);
+    
+    if (lessonMode === "lecture" && !res.finished) {
+      setTimeout(() => {
+        const step = activeSession.currentStep;
+        if (step && step.correctMove) {
+          setCoachSays(moveToInstruction(step.correctMove, activeSession.game.fen()));
+        }
+      }, 1200);
+    }
+
     setShowHint(false);
     setHistory((p) => [...p, { fen: wFen, step: midIdx }]);
 
@@ -1394,17 +1484,44 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
         setFen(replyFen);
         setCurrentStepIndex(replyStep);
         setHistory((p) => [...p, { fen: replyFen, step: replyStep }]);
-        if (res.autoAdvance) {
+        
+        if (lessonMode === "lecture") {
+          const nextStep = activeSession.currentStep;
+          if (nextStep && nextStep.correctMove) {
+            setCoachSays(moveToInstruction(nextStep.correctMove, replyFen));
+          }
+        } else if (res.autoAdvance) {
           setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
         }
       });
     } else if (res.autoAdvance) {
       setTimeout(() => {
-        setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
+        if (lessonMode === "lecture" && activeSession.currentStep?.correctMove) {
+          setCoachSays(moveToInstruction(activeSession.currentStep.correctMove, activeSession.game.fen()));
+        } else {
+          setCoachSays(activeSession.currentStep?.hint ?? "Continue the demonstration.");
+        }
       }, 1200);
     }
 
     return true;
+  }
+
+  const [clickFrom, setClickFrom] = useState<string | null>(null);
+
+  function handleBoardSquareClick(square: string) {
+    if (finished || (sfPlayMode ? sfWaiting : activeSession.awaitingOpponentReply)) {
+      setClickFrom(null);
+      return;
+    }
+
+    if (!clickFrom) {
+      setClickFrom(square);
+    } else {
+      const origin = clickFrom;
+      setClickFrom(null); 
+      activeDropHandler(origin, square);
+    }
   }
 
   async function makeEngineMove(currentFen: string) {
@@ -1443,10 +1560,11 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
   }
 
   function startSfPlay() {
-    const startingFen = fen; // Use the currently viewed FEN from the lesson history
+    const startingFen = fen; 
     setSfPlayFen(startingFen);
     sfPlayFenRef.current = startingFen;
     setSfPlayMode(true);
+    setShowHint(false);
 
     const g = new Chess(startingFen);
     const isPlayingBlack = studentSide === "Student";
@@ -1492,13 +1610,13 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
       setShowHint(false);
       return;
     }
-
+    
     setShowHint(true);
 
-    if (ready && lessonMode === "puzzle" && !finished) {
+    if (sfPlayMode && ready && !finished) {
       setHintLoading(true);
       try {
-        await getHint(fen);
+        await getHint(sfPlayFenRef.current);
       } finally {
         setHintLoading(false);
       }
@@ -1518,8 +1636,12 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
   const wbW = isStacked ? boardSize : Math.min(Math.round(boardSize * 0.76), 400);
   const wbH = boardSize + 50;
   const currentStep = activeSession.currentStep;
+  
   const liveHint =
-    currentStep?.hint ?? (lessonMode === "lecture" ? "Play the next move." : "Find the best move.");
+    lessonMode === "lecture" && currentStep?.correctMove
+      ? moveToInstruction(currentStep.correctMove, fen)
+      : (currentStep?.hint ?? (lessonMode === "lecture" ? "Play the next move." : "Find the best move."));
+      
   const liveExplanation = currentStep?.explanation ?? "";
   const editorFilename = `${String(lessonIndex + 1).padStart(4, "0")}-${lesson.id}`;
 
@@ -1527,6 +1649,16 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
 
   return (
     <div style={S.page}>
+      <style>
+        {`
+          @keyframes borderPulse {
+            0% { border-left-color: #a69272; box-shadow: inset 2px 0 4px rgba(166,146,114,0.1); }
+            50% { border-left-color: #ebdcb9; box-shadow: inset 4px 0 12px rgba(235,220,185,0.4); }
+            100% { border-left-color: #a69272; box-shadow: inset 2px 0 4px rgba(166,146,114,0.1); }
+          }
+        `}
+      </style>
+
       <button style={S.hamburger} onClick={() => setMenuOpen((m) => !m)}>
         {menuOpen ? "✕ Close" : "☰ Index"}
       </button>
@@ -1631,9 +1763,13 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
 
         <div
           style={{
-            ...S.headerRow,
+            display: "flex",
             flexDirection: isStacked ? "column" : "row",
             alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            maxWidth: 1040,
+            paddingBottom: 4,
             gap: isStacked ? 8 : 12,
           }}
         >
@@ -1648,22 +1784,6 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
               </span>
             ))}
           </div>
-
-          {!finished && !sfPlayMode && currentStep && (
-            <div style={S.integratedTaskArea}>
-              <span style={S.taskPrefixLabel}>
-                {lessonMode === "lecture" ? "DEMONSTRATION" : "ASSIGNMENT"} • STEP {currentStepIndex + 1}:
-              </span>
-              <span style={S.taskInlineContent}>{liveHint}</span>
-            </div>
-          )}
-
-          {sfPlayMode && (
-            <div style={S.integratedTaskArea}>
-              <span style={S.taskPrefixLabel}>VS STOCKFISH — SKILL {sfSkillLevel}:</span>
-              <span style={S.taskInlineContent}>{sfWaiting ? "Engine thinking…" : "Your move"}</span>
-            </div>
-          )}
 
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
             <button
@@ -1716,16 +1836,65 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
               </>
             )}
 
-            {!sfPlayMode && (
-              <button
-                style={{ ...S.toolBtn, ...(showHint ? S.toolActive : {}), opacity: hintLoading ? 0.6 : 1 }}
-                onClick={handleHintClick}
-                disabled={hintLoading}
-              >
-                {hintLoading ? "⏳" : "💡"} Hint
-              </button>
-            )}
+            <button
+              style={{ ...S.toolBtn, ...(showHint ? S.toolActive : {}), opacity: hintLoading ? 0.6 : 1 }}
+              onClick={handleHintClick}
+              disabled={hintLoading}
+            >
+              {hintLoading ? "⏳" : "💡"} Hint
+            </button>
           </div>
+        </div>
+
+        {/* ── DEDICATED INSTRUCTION BANNER ── */}
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 1040,
+            background: finished ? "#f2f7f2" : "#ffffff",
+            borderLeft: `4px solid ${finished ? "#4a6b44" : "#a69272"}`,
+            padding: "10px 16px",
+            boxSizing: "border-box",
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            marginBottom: 16,
+            transition: "background 0.3s, border-color 0.3s",
+            animation: finished ? "none" : "borderPulse 2.5s infinite alternate ease-in-out",
+          }}
+        >
+          {!finished && !sfPlayMode && (
+            <span
+              style={{
+                fontSize: 10,
+                color: "#7a6e5d",
+                letterSpacing: "1px",
+                fontWeight: "bold",
+                textTransform: "uppercase",
+                fontFamily: "Georgia, serif",
+                flexShrink: 0,
+              }}
+            >
+              STEP {currentStepIndex + 1} OF {safeSteps.length || 1}
+            </span>
+          )}
+          <span
+            style={{
+              color: finished ? "#3a5233" : "#2b2118",
+              fontSize: 15,
+              fontWeight: "bold",
+              fontFamily: "Georgia, serif",
+              lineHeight: 1.2,
+            }}
+          >
+            {finished
+              ? "Lesson Complete"
+              : sfPlayMode
+              ? sfWaiting
+                ? "Engine thinking…"
+                : "Your move"
+              : liveHint}
+          </span>
         </div>
 
         <div
@@ -1752,7 +1921,9 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                 fen={sfPlayMode ? sfPlayFen : fen}
                 boardSize={boardSize}
                 onPieceDrop={activeDropHandler}
-                hintSquares={hintSquares}
+                onSquareClick={handleBoardSquareClick}
+                clickFromSquare={clickFrom}
+                hintSquares={activeHintSquares}
                 boardOrientation={boardOrientation}
               />
             </div>
@@ -1800,18 +1971,6 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                   >
                     ⌥ Back
                   </button>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      color: "#7a6e5d",
-                      textAlign: "center",
-                      minWidth: 70,
-                      fontFamily: "Georgia, serif",
-                      fontStyle: "italic",
-                    }}
-                  >
-                    Step {currentStepIndex + 1} of {safeSteps.length || 1}
-                  </span>
                   <button style={S.btn} onClick={() => loadLesson(lessonIndex)}>
                     ⟳ Reset
                   </button>
@@ -1962,7 +2121,9 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                       }}
                       onClick={() => {
                         setSfPlayMode(false);
-                        setCoachSays(activeSession.currentStep?.hint ?? "Study the position. Make your move.");
+                        setShowHint(false);
+                        setClickFrom(null);
+                        setTick((t) => t + 1);
                       }}
                     >
                       📖 Learn
@@ -2174,24 +2335,6 @@ const S: Record<string, CSSProperties> = {
     maxWidth: 1040,
     paddingBottom: 4,
   },
-  integratedTaskArea: {
-    flex: 1,
-    textAlign: "center",
-    padding: "0 10px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    fontSize: 13,
-    fontFamily: "Georgia, serif",
-  },
-  taskPrefixLabel: {
-    fontSize: 10,
-    fontWeight: "bold",
-    color: "#8c7e6b",
-    letterSpacing: "0.5px",
-    marginRight: 6,
-  },
-  taskInlineContent: { color: "#d9cb9e" },
   hamburger: {
     position: "fixed",
     top: 12,

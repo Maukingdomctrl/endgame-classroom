@@ -4,12 +4,12 @@
  * Converts a PGN string (single or multi-game) → RawLesson[]
  *
  * Supports:
- *  - Single and multi-game PGN files
- *  - Lecture mode (full game line) and puzzle mode (step-by-step hints)
- *  - Variations stored per-step (shown as coach hints, not fully playable yet)
- *  - Missing optional headers gracefully ignored
- *  - Missing FEN falls back to standard starting position
- *  - Comments used as coach narration in lecture mode
+ * - Single and multi-game PGN files
+ * - Lecture mode (full game line) and puzzle mode (step-by-step hints)
+ * - Variations stored per-step (shown as coach hints, not fully playable yet)
+ * - Missing optional headers gracefully ignored
+ * - Missing FEN falls back to standard starting position
+ * - Comments used as coach narration in lecture mode
  */
 
 import { parse as parsePgnLib } from "@mliebelt/pgn-parser";
@@ -80,29 +80,37 @@ function gameToLesson(game: PgnGame, fallbackIndex: number): RawLesson {
 
   const rawSide  = tag(game, "SideToMove") || "white";
   const sideToMove: "white" | "black" = rawSide.toLowerCase() === "black" ? "black" : "white";
+  
+  // BUG-PP-2 Fix: Determine the student's color based on SideToMove
+  const studentColor = sideToMove === "black" ? "b" : "w";
 
   const moves    = game.moves ?? [];
   const steps: LessonStep[] = [];
 
   let i = 0;
   while (i < moves.length) {
-    const wMove = moves[i];
-    if (wMove.turn !== "w") { i++; continue; }
+    const studentMove = moves[i];
+    
+    // BUG-PP-2 Fix: Compare against the actual student's color, not strictly "w"
+    if (studentMove.turn !== studentColor) { 
+      i++; 
+      continue; 
+    }
 
-    const { hint, explanation } = splitComment(wMove.commentAfter || wMove.commentBefore);
-    const varSummary = variationSummary(wMove.variations ?? []);
+    const { hint, explanation } = splitComment(studentMove.commentAfter || studentMove.commentBefore);
+    const varSummary = variationSummary(studentMove.variations ?? []);
 
-    // Combine hint with variation summary if present
-    const fullHint = [hint, varSummary ? `Variation: ${varSummary}` : ""].filter(Boolean).join(" | ");
+    // BUG-PP-3 Fix: Use a newline '\n' instead of the pipe '|' to prevent splitComment collisions later
+    const fullHint = [hint, varSummary ? `Variation: ${varSummary}` : ""].filter(Boolean).join("\n");
 
-    const bMove = moves[i + 1];
+    const opponentMove = moves[i + 1];
     let opponentReply: LessonStep["opponentReply"] = null;
 
-    if (bMove && bMove.turn === "b") {
-      const { explanation: replyNote } = splitComment(bMove.commentAfter || bMove.commentBefore);
-      const replyVars = variationSummary(bMove.variations ?? []);
+    if (opponentMove && opponentMove.turn !== studentColor) {
+      const { explanation: replyNote } = splitComment(opponentMove.commentAfter || opponentMove.commentBefore);
+      const replyVars = variationSummary(opponentMove.variations ?? []);
       opponentReply = {
-        move:        bMove.notation.notation,
+        move:        opponentMove.notation.notation,
         explanation: [replyNote, replyVars ? `Variation: ${replyVars}` : ""].filter(Boolean).join(" ") || undefined,
       };
       i += 2;
@@ -111,7 +119,7 @@ function gameToLesson(game: PgnGame, fallbackIndex: number): RawLesson {
     }
 
     steps.push({
-      correctMove:  wMove.notation.notation,
+      correctMove:  studentMove.notation.notation,
       hint:         fullHint   || undefined,
       explanation:  explanation || undefined,
       opponentReply,

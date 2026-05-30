@@ -9,6 +9,7 @@ export interface StockfishHook {
   analyze:     (fen: string, depth?: number) => void;
   playMove:    (fen: string, skillLevel?: number) => Promise<string | null>;
   getHint:     (fen: string) => Promise<string | null>;
+  clearHint:   () => void;
   sendCommand: (cmd: string) => void;
 }
 
@@ -95,8 +96,6 @@ export function useStockfish(
 
     worker.onmessage = (e: MessageEvent) => {
       // ── DIAGNOSTIC: log every raw line from the worker ──────────────────
-      // This will show us exactly what format Stockfish is outputting.
-      // Remove after confirming the format.
       const raw  = e.data;
       const line = typeof raw === 'string' ? raw : (raw instanceof ArrayBuffer ? '[ArrayBuffer]' : JSON.stringify(raw));
 
@@ -163,6 +162,9 @@ export function useStockfish(
 
     worker.onerror = (err) => console.error('[SF Worker error]', err);
 
+    // BUG-SF-3 Fix: Explicitly send isready now that the onmessage handler is ready to catch it
+    worker.postMessage('isready');
+
     return () => {
       clearTimeout(readyFallback);
       worker.terminate();
@@ -188,20 +190,28 @@ export function useStockfish(
     }),
   [submitJob]);
 
-  const getHint = useCallback((fen: string): Promise<string | null> =>
-    new Promise((resolve) =>
+  const getHint = useCallback((fen: string): Promise<string | null> => {
+    // BUG-SF-2 Fix: Clear hint squares immediately so stale hints don't show during slow SF responses
+    setHintSquares([]);
+    
+    return new Promise((resolve) =>
       submitJob({
         kind: 'hint', fen,
         resolve: (move) => {
           if (move && move.length >= 4) {
             setHintSquares([move.slice(0, 2), move.slice(2, 4)]);
-            setTimeout(() => setHintSquares([]), 3000);
+            // BUG-SF-1 Fix: 3000ms timeout removed to prevent premature hint wiping
           }
           resolve(move);
         },
       })
-    ),
-  [submitJob]);
+    );
+  }, [submitJob]);
+
+  // BUG-SF-1 Fix: Expose clearHint so parent can control when it clears
+  const clearHint = useCallback(() => {
+    setHintSquares([]);
+  }, []);
 
   return {
     ready,
@@ -212,6 +222,7 @@ export function useStockfish(
     analyze,
     playMove,
     getHint,
+    clearHint,
     sendCommand,
   };
 }

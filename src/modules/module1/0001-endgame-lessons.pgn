@@ -1,13 +1,5 @@
 [Event "Endgame Classroom"]
-[Site "?"]
-[Date "????.??.??"]
-[Round "?"]
-[White "Student"]
-[Black "Opponent"]
-[Result "*"]
-[SetUp "1"]
-[FEN "4k3/8/3K4/4P3/8/8/8/8 w - - 0 1"]
-[Module "module-1"]
+[Module "module1"]
 [LessonId "m1-0001"]
 [Title "King & Pawn vs King — Opposition"]
 [Elo "800"]
@@ -16,44 +8,49 @@
 [Intro "The most fundamental endgame: King and Pawn versus King. The key concept is the opposition — when two kings face each other with one square between them, the player who does NOT have to move holds the opposition and controls the critical squares."]
 [FinalReflection "You held the opposition and promoted the pawn. This pattern decides thousands of games. Remember: the king must lead the pawn, not follow it."]
 [MastersNote "The king must be in front of the pawn by at least one square to win."]
-[SideToMove "white"]
-[Mode "lecture"]
-
-1. Ke6 {Advance the king in front of the pawn. This seizes the opposition.} Kd8 {Black steps aside.} 2. Kf7 {The key move! Step aside to control the promotion square and clear the path for the pawn.} Kd7 {Black tries to stay close to block.} 3. e6+ {The pawn advances with check.} Kd8 {Forced retreat.} 4. e7+ {The pawn safely marches forward.} Kd7 5. e8=Q+ {Promotion! The endgame principle is complete.} *
-
-[Event "Endgame Classroom"]
 [Site "?"]
 [Date "????.??.??"]
-[Round "?"]
 [White "Student"]
 [Black "Opponent"]
 [Result "*"]
+[FEN "4k3/8/3K4/4P3/8/8/8/8 w - - 0 1"]
 [SetUp "1"]
-[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
-[Module "module-1"]
+[SideToMove "white"]
+1. Ke6 {Advance the king in front of the pawn.|This seizes the opposition.} Kd8 {Black steps aside.}
+2. Kf7 {The key move!|Step aside to control the promotion square and clear the path for the pawn.} Kd7 {Black tries to stay close to block.}
+3. e6+ {The pawn advances with check.} Kd8 {Forced retreat.}
+4. e7+ {The pawn safely marches forward.} Kd7
+5. e8=Q {Promotion! The endgame principle is complete.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
 [LessonId "m1-0002"]
 [Title "Rook Endgame — Lucena Position"]
 [Elo "900"]
 [Theme "rook endgame, Lucena, bridge building"]
-[Objective "Win using the bridge-building technique to promote the pawn."]
-[Intro "The Lucena Position is the cornerstone of rook endgames. You have a pawn on the 7th rank with your king in front. The winning method is called 'building a bridge' — using your rook to shield the king from checks."]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
 [FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
 [MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
-[SideToMove "white"]
-[Mode "lecture"]
-
-1. Rf4 {Step one of the bridge — bring the rook to the 4th rank to shelter the king.|The rook moves to prepare a shield.} Ra1 {Black waits, preparing to check the king from behind.} 2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.} 3. Kd6 {March the king toward the rook.} Rd1+ 4. Kc5 Rc1+ 5. Kd5 Rd1+ 6. Rd4 {The bridge is complete! The rook cuts off the black king's checks.} *
-
-[Event "Endgame Classroom"]
 [Site "?"]
 [Date "????.??.??"]
-[Round "?"]
 [White "Student"]
 [Black "Opponent"]
 [Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
 [SetUp "1"]
-[FEN "8/8/8/3k3r/8/8/8/Q3K3 w - - 0 1"]
-[Module "module-1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
 [LessonId "m1-0003"]
 [Title "Queen vs Rook — Philidor's Method"]
 [Elo "1000"]
@@ -62,21 +59,20 @@
 [Intro "Queen versus rook is a theoretical win, but it requires precise technique. The main danger is stalemate. The easiest way to win is to force the defending king away from its rook, setting up a fork or a skewer."]
 [FinalReflection "Excellent technique. Forcing the King away from the Rook using a skewer is the most direct way to resolve this endgame."]
 [MastersNote "Never rush. Stalemate traps are everywhere."]
-[SideToMove "white"]
-[Mode "puzzle"]
-
-1. Qa5+ {The queen delivers a skewer along the fifth rank.|Check!} Kc4 {The king must step away, leaving the rook defenseless.|Forced move.} 2. Qxh5 {White wins the rook and the game.|The skewer is complete.} *
-
-[Event "Endgame Classroom"]
 [Site "?"]
 [Date "????.??.??"]
-[Round "?"]
-[White "Opponent"]
-[Black "Student"]
+[White "Student"]
+[Black "Opponent"]
 [Result "*"]
+[FEN "8/8/8/3k3r/8/8/8/Q3K3 w - - 0 1"]
 [SetUp "1"]
-[FEN "3k4/8/r7/3PK3/8/8/8/8 w - - 0 1"]
-[Module "module-1"]
+[SideToMove "white"]
+1. Qa5+ {The queen delivers a skewer along the fifth rank.|Check!} Kc4 {Forced move.}
+2. Qxh5 {White wins the rook and the game.|The skewer is complete.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
 [LessonId "m1-0004"]
 [Title "Rook vs Pawn — Philidor's Draw"]
 [Elo "850"]
@@ -85,7 +81,171 @@
 [Intro "When you have a rook and your opponent has a passed pawn about to promote, the drawing technique is to place your rook on the 6th rank (the Philidor position). This cuts off the enemy king until the pawn advances, at which point you drop the rook behind for perpetual checks."]
 [FinalReflection "You held the Philidor draw. This technique saves countless endgames. The key idea: rook on the 6th holds, rook behind the pawn draws if timed correctly."]
 [MastersNote "Rook on the 6th rank — not the 7th, not the 5th. The 6th."]
-[SideToMove "white"]
-[Mode "lecture"]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3k4/8/r7/3PK5/8/8/8/8 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "black"]
+1. Re1+ {The White king has nowhere to hide.} Kd5 {King steps back.}
+2. Rd1+ {Keep checking.} Ke5 {King moves again.}
+3. Re1+ {The Philidor repetition holds the draw.}
+*
 
-1. d6 {The pawn reaches the 6th rank.|White pushes the pawn.} Ra1! {The key to the Philidor! Once the pawn advances, drop the rook behind to check.|The rook drops to the back rank.} 2. Ke6 {White's King steps up to threaten mate or promote.|The king advances.} Re1+ {Check from behind! The White king has nowhere to hide.|Start checking from behind.} 3. Kd5 {King steps back.} Rd1+ {Keep checking.} 4. Ke5 {King moves again.} Re1+ {Perpetual check!|The Philidor repetition holds the draw.} *
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
+
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Create tower"]
+[Intro "Now we have fun"]
+[FinalReflection "You built the bridge perfectly. The Lucena Position appears in nearly every rook endgame — this technique alone is worth 100 rating points."]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*

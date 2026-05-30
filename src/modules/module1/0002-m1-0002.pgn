@@ -1,0 +1,25 @@
+[Event "Endgame Classroom"]
+[Module "module1"]
+[LessonId "m1-0002"]
+[Title "Rook Endgame — Lucena Position"]
+[Elo "900"]
+[Theme "rook endgame, Lucena, bridge building"]
+[Objective "Win using the bridge-building technique to promote the pawn."]
+[Intro "The Lucena Position is the cornerstone of rook endgames. You have a pawn on the 7th rank with your king in front. The winning method is called 'building a bridge' — using your rook to shield the king from checks."]
+[FinalReflection "hello"]
+[MastersNote "The bridge is built in four rook moves. Know this pattern cold."]
+[Site "?"]
+[Date "????.??.??"]
+[White "Student"]
+[Black "Opponent"]
+[Result "*"]
+[FEN "3K4/3P3k/8/8/8/8/r7/5R2 w - - 0 1"]
+[SetUp "1"]
+[SideToMove "white"]
+1. Rf4 {Step one of the bridge.|Bring the rook to the 4th rank to shelter the king.} Ra1 {Black waits, preparing to check the king from behind.}
+2. Ke7 {The king steps out of the pawn's shadow.} Re1+ {Black begins checking.}
+3. Kd6 {March the king toward the rook.} Rd1+
+4. Kc5 Rc1+
+5. Kd5 Rd1+
+6. Rd4 {The bridge is complete!|The rook cuts off the black king's checks.}
+*
