@@ -1,5 +1,6 @@
 import { Chess } from "chess.js";
-import type { RawLesson, LessonStep } from "../modules/module1/loader";
+// FIX: Updated import path to central moduleLoader to resolve TS2307
+import type { RawLesson, LessonStep } from "../modules/moduleLoader";
 
 function normalizeFen(fen: string, overrideTurn?: "w" | "b"): string {
   const parts    = fen.trim().split(/\s+/);
@@ -98,9 +99,10 @@ export class Session {
       .replace(/[+#x=?!\s]/g, "")
       .replace(/[QRBNqrbn]$/, "");
     const expectedTo   = rawExpected.slice(-2).toLowerCase();
-    const expectedFrom = (step as { from?: string }).from
-      ? String((step as { from?: string }).from).toLowerCase()
-      : null;
+    
+    // Cleaned up: No longer needs type casting because step.from is typed
+    const expectedFrom = step.from ? String(step.from).toLowerCase() : null;
+    
     const toMatches    = move.to.toLowerCase() === expectedTo;
     const fromMatches  = expectedFrom === null || move.from.toLowerCase() === expectedFrom;
     const isCorrect    = toMatches && fromMatches;

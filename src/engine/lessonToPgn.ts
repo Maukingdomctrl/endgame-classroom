@@ -5,7 +5,7 @@
  * Used by the editor to save changes back to .pgn files.
  */
 
-import type { RawLesson } from "../modules/module1/loader";
+import type { RawLesson } from "../modules/moduleLoader";
 
 function escapeTag(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -64,7 +64,7 @@ export function lessonToPgn(lesson: RawLesson): string {
     // Opponent reply
     if (step.opponentReply) {
       const reply      = step.opponentReply;
-      const replyMove  = reply.move || `${reply.from}${reply.to}`;
+      const replyMove  = reply.move;
       let replyLine    = ` ${replyMove}`;
       if (reply.explanation) replyLine += ` {${reply.explanation}}`;
       moveLine += replyLine;

@@ -13,7 +13,8 @@
  */
 
 import { parse as parsePgnLib } from "@mliebelt/pgn-parser";
-import type { RawLesson, LessonStep } from "../modules/module1/loader";
+// FIX: Updated import path to central moduleLoader to resolve TS2307
+import type { RawLesson, LessonStep } from "../modules/moduleLoader";
 
 const STANDARD_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -123,7 +124,6 @@ function gameToLesson(game: PgnGame, fallbackIndex: number): RawLesson {
       hint:         fullHint   || undefined,
       explanation:  explanation || undefined,
       opponentReply,
-      mode,          // pass mode down to each step
     } as LessonStep);
   }
 

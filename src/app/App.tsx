@@ -17,11 +17,11 @@ import {
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 import { Session } from "../engine/session";
-import { getModuleData, onModulesReloaded } from "../modules/moduleLoader";
+import { getModuleData, type RawLesson } from "../modules/moduleLoader";
 import { useStockfish } from "../engine/useStockfish";
 import EvalBar, { EVAL_W, EVAL_GAP } from "../components/EvalBar";
 import BoardEditor from "../components/BoardEditor";
-
+import type { Arrow, Square } from "react-chessboard/dist/chessboard/types";
 
 const BOARD_BORDER = 10;
 const FALLBACK_FEN = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
@@ -1026,10 +1026,10 @@ function KnightNavigatorView({ onBack }: { onBack: () => void }) {
     const currentActiveRecord = gameHistory[currentHistoryIndex];
     if (!currentActiveRecord) return [];
 
-    const arrows: Array<[string, string, string]> = [];
+    const arrows: Array<Arrow> = [];
     const pathArr = currentActiveRecord.correctPath;
     for (let i = 0; i < pathArr.length - 1; i++) {
-      arrows.push([pathArr[i], pathArr[i + 1], "#64d282"]);
+      arrows.push([pathArr[i] as Square, pathArr[i + 1] as Square, "#64d282"]);
     }
     return arrows;
   }, [gameState, gameHistory, currentHistoryIndex]);
@@ -1298,25 +1298,27 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
 
   const sfPlayFenRef = useRef(FALLBACK_FEN);
 
-  const lesson = useMemo(() => {
-    return currentModuleData?.lessons?.[lessonIndex] || {
+  const lesson = useMemo((): RawLesson => {
+    return currentModuleData?.lessons?.[lessonIndex] ?? {
       id: "m-error",
       module: moduleId,
       title: "Module Data Not Found",
       elo: 0,
       theme: [],
-      intro: `Please ensure ${moduleId}/loader.ts exists and is exported correctly.`,
+      intro: `Please ensure ${moduleId}/loader.ts exists.`,
       objective: "",
       steps: [],
       mode: "puzzle" as const,
+      startFen: FALLBACK_FEN,
+      sideToMove: "white" as const,
     };
   }, [lessonIndex, currentModuleData, moduleId]);
 
-  const lessonMode = (lesson as { mode?: string }).mode ?? "puzzle";
-  const mastersNote = (lesson as { mastersNote?: string }).mastersNote;
+  const lessonMode = lesson.mode ?? "puzzle";
+  const mastersNote = lesson.mastersNote;
   const studentSide = (lesson as { black?: string }).black;
 
-  const [fen, setFen] = useState(() => lesson?.startFen || FALLBACK_FEN);
+  const [fen, setFen] = useState(() => lesson.startFen || FALLBACK_FEN);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [coachSays, setCoachSays] = useState("Study the position. Make your move.");
   const [feedback, setFeedback] = useState<{ text: string; ok: boolean } | null>(null);
@@ -1328,7 +1330,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [history, setHistory] = useState<Array<{ fen: string; step: number }>>([
-    { fen: lesson?.startFen || FALLBACK_FEN, step: 0 },
+    { fen: lesson.startFen || FALLBACK_FEN, step: 0 },
   ]);
 
   const sessionRef = useRef<Session | null>(null);
@@ -1347,7 +1349,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     if (!showHint && lessonMode !== "lecture") return [];
     if (sfPlayMode) return hintSquares;
 
-    const step = lesson?.steps?.[currentStepIndex];
+    const step = lesson.steps?.[currentStepIndex];
     if (step && step.correctMove) {
       if (step.from && step.to) {
         return [step.from, step.to];
@@ -1630,8 +1632,8 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
     }
   }
 
-  const safeThemes = Array.isArray(lesson?.theme) ? lesson.theme : [];
-  const safeSteps = Array.isArray(lesson?.steps) ? lesson.steps : [];
+  const safeThemes = Array.isArray(lesson.theme) ? lesson.theme : [];
+  const safeSteps = Array.isArray(lesson.steps) ? lesson.steps : [];
   const totalLeftBlockW = boardSize + EVAL_W + EVAL_GAP;
   const wbW = isStacked ? boardSize : Math.min(Math.round(boardSize * 0.76), 400);
   const wbH = boardSize + 50;
@@ -1764,7 +1766,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
         <div
           style={{
             display: "flex",
-            flexDirection: isStacked ? "column" : "row",
+            flexDirection: "column",
             alignItems: "center",
             justifyContent: "space-between",
             width: "100%",
@@ -1774,7 +1776,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
           }}
         >
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flexShrink: 0 }}>
-            <span style={S.badge}>{lesson?.elo ?? 800} ELO</span>
+            <span style={S.badge}>{lesson.elo ?? 800} ELO</span>
             <span style={{ ...S.badge, color: lessonMode === "lecture" ? "#a3b39c" : "#c4b293" }}>
               {lessonMode === "lecture" ? "📖 Lecture" : lessonMode === "free" ? "♟ Free" : "🎯 Puzzle"}
             </span>
@@ -2178,7 +2180,7 @@ function ClassroomView({ moduleId, onBack }: { moduleId: string; onBack: () => v
                           fontFamily: "Georgia, serif",
                         }}
                       >
-                        {(lesson as { finalReflection?: string }).finalReflection ||
+                        {lesson.finalReflection ||
                           "Lesson completed successfully."}
                       </p>
                     </div>

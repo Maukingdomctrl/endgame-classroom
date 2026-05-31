@@ -1,5 +1,5 @@
 /**
- * BoardEditor.tsx  (was: boardeditor.tsx — renamed to fix case-sensitive import)
+ * BoardEditor.tsx
  *
  * Floating draggable editor window for teachers.
  * - Left:  interactive board + FEN input + piece palette
@@ -9,10 +9,11 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Chessboard }  from "react-chessboard";
-import { Chess }       from "chess.js";
-import type { RawLesson, LessonStep } from "../modules/module1/loader";
+// FIX: Imported strict types from chess.js to resolve implicit 'any' errors
+import { Chess, type Square, type Color, type PieceSymbol } from "chess.js";
 
-// FIX Issue 2: Import loadAllModules and getModuleData
+// FIX: Updated import path to central moduleLoader
+import type { RawLesson, LessonStep } from "../modules/moduleLoader";
 import { loadAllModules, getModuleData } from "../modules/moduleLoader";
 import { lessonToPgn } from "../engine/lessonToPgn";
 
@@ -31,7 +32,7 @@ interface Props {
   onClose:  () => void;
   onSaved:  (updated: RawLesson) => void;
   moduleId: string;
-  filename: string;
+  filename?: string; // FIX: Marked optional since we hardcode the target below
 }
 
 function safeFen(fen: string): string {
@@ -43,7 +44,8 @@ function fenIsValid(fen: string): boolean {
   try { new Chess(fen); return true; } catch { return false; }
 }
 
-export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filename }: Props) {
+// FIX: Removed unused 'filename' from destructuring
+export default function BoardEditor({ lesson, onClose, onSaved, moduleId }: Props) {
   const panelRef   = useRef<HTMLDivElement>(null);
   const dragOrigin = useRef<{ mx: number; my: number; px: number; py: number } | null>(null);
   const [pos, setPos] = useState({ x: 60, y: 40 });
@@ -96,11 +98,16 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
   function onPieceDrop(src: string, tgt: string): boolean {
     try {
       const g = new Chess(fen);
-      const piece = g.get(src as any);
+      const sourceSq = src as Square;
+      const targetSq = tgt as Square;
+
+      const piece = g.get(sourceSq);
       if (!piece) return false;
-      g.remove(src as any);
-      g.remove(tgt as any);
-      g.put(piece, tgt as any);
+
+      g.remove(sourceSq);
+      g.remove(targetSq);
+      g.put(piece, targetSq);
+
       const newFen = g.fen();
       setFen(newFen); setFenInput(newFen);
       setDraft((d) => ({ ...d, startFen: newFen }));
@@ -112,10 +119,13 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
     if (!selectedPiece) return;
     try {
       const g = new Chess(fen);
-      const color = selectedPiece[0] as "w" | "b";
-      const type  = selectedPiece[1].toLowerCase() as any;
-      g.remove(square as any);
-      g.put({ type, color }, square as any);
+      const color = selectedPiece[0] as Color;
+      const type  = selectedPiece[1].toLowerCase() as PieceSymbol;
+      const targetSq = square as Square;
+
+      g.remove(targetSq);
+      g.put({ type, color }, targetSq);
+
       const newFen = g.fen();
       setFen(newFen); setFenInput(newFen);
       setDraft((d) => ({ ...d, startFen: newFen }));
@@ -125,7 +135,8 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
   function onSquareRightClick(square: string) {
     try {
       const g = new Chess(fen);
-      g.remove(square as any);
+      g.remove(square as Square);
+
       const newFen = g.fen();
       setFen(newFen); setFenInput(newFen);
       setDraft((d) => ({ ...d, startFen: newFen }));
@@ -143,34 +154,25 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
     });
   }
 
-  // FIX Issue 3: Safely merge the draft lesson back into the full module array to prevent wiping siblings
   function updateAndExportModulePgn(updatedLesson: RawLesson, modId: string): string {
     const fullModule = getModuleData(modId);
     if (!fullModule || !fullModule.lessons) {
-      // Fallback: If we can't find the module, just serialize the single lesson
       return lessonToPgn(updatedLesson);
     }
 
-    // Map through the existing lessons, replacing the old version of THIS lesson with the draft
     const updatedLessonsList = fullModule.lessons.map((l: RawLesson) => 
       l.id === updatedLesson.id ? updatedLesson : l
     );
 
-    // Serialize ALL lessons in the module, appending them with double newlines
     return updatedLessonsList.map((l: RawLesson) => lessonToPgn(l)).join("\n\n");
   }
 
   async function save() {
     setSaving(true); setSaveMsg("");
     try {
-      // Generate the unified PGN text containing all lessons for this module
       const combinedPgnText = updateAndExportModulePgn(draft, moduleId);
-      
-      // Override the auto-generated filename to target the primary module file
-      // Note: If you eventually implement multi-file modules, this logic will need to track origin files
       const moduleTargetFilename = "0001-endgame-lessons";
 
-      // FIX Issue 1: Using relative /api path
       const res = await fetch("/api/save-pgn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -181,10 +183,7 @@ export default function BoardEditor({ lesson, onClose, onSaved, moduleId, filena
       
       if (data.ok) { 
         setSaveMsg("✓ Saved"); 
-        
-        // FIX Issue 2: Refresh the global cache so the UI updates immediately
         await loadAllModules();
-        
         onSaved(draft); 
       }
       else { 
